@@ -1,0 +1,18 @@
+{
+  "name": "snowflake-kinetic-louvre-facade",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Interactive 3D visualisation of a high-rise curtain wall carrying kinetic snowflake louvre modules. All geometry generated procedurally in three.js.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "three": "0.185.1"
+  },
+  "devDependencies": {
+    "vite": "8.2.2"
+  }
+}
