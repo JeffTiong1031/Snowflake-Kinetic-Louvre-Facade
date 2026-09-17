@@ -525,7 +525,7 @@ export const ENV_SATURATION = 0.45;
  * Post-processing (postfx.js)
  * ------------------------------------------------------------------ */
 
-export const POST_MSAA_SAMPLES = 4;
+export const POST_MSAA_SAMPLES = 2;
 /**
  * Ambient occlusion: how strongly it darkens the creases, and how far it
  * reaches (m) -- this much per metre of orbit distance, within these bounds.
@@ -684,7 +684,7 @@ export const CANOPY_COLOR_B = 0x6e8f45;
 
 export const SHADOW_MAP_SIZES = [2048, 1024, 512];
 export const SHADOW_DEGRADE_FPS = 45;
-export const SHADOW_DEGRADE_SECONDS = 3;
+export const SHADOW_DEGRADE_SECONDS = 1.0;
 
 /* ------------------------------------------------------------------ *
  * City context -- roads, neighbouring blocks, traffic

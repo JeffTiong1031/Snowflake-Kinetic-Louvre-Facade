@@ -153,13 +153,13 @@ if (import.meta.env.DEV) window.__snowflake = { camera, controls, presets };
  */
 const QUALITY_STEPS = [
   { post: 2, shadow: 0 },
-  { post: 1, shadow: 0 },
   { post: 1, shadow: 1 },
   { post: 0, shadow: 1 },
   { post: 0, shadow: 2 },
 ];
 const pinnedQuality = new URLSearchParams(window.location.search).get('quality');
-let qualityStep = pinnedQuality === 'low' ? QUALITY_STEPS.length - 1 : 0;
+let qualityStep =
+  pinnedQuality === 'high' ? 0 : pinnedQuality === 'low' ? QUALITY_STEPS.length - 1 : 1;
 let starvedFor = 0;
 
 function applyQuality() {
@@ -213,6 +213,12 @@ function actuatorStroke(phase) {
 /* ------------------------------------------------------------------ *
  * Frame loop
  * ------------------------------------------------------------------ */
+
+// Pre-compile scene materials and run a warmup frame so shader compilation
+// completes before the stats timer and animation loop start.
+renderer.compile(scene, camera);
+postfx.render();
+renderer.info.reset();
 
 const timer = new THREE.Timer();
 
