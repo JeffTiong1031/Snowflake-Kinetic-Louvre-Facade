@@ -30,7 +30,7 @@
         position: fixed;
         top: 16px;
         left: 16px;
-        width: 268px;
+        width: 288px;
         padding: 16px;
         border: 1px solid var(--line);
         border-radius: 10px;
@@ -127,6 +127,52 @@
 
       .checkbox input { accent-color: var(--accent); cursor: pointer; }
 
+      .sun-note {
+        margin: 4px 0 12px;
+        min-height: 16px;
+        font-size: 11px;
+        color: var(--muted);
+      }
+
+      .modes {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 4px;
+      }
+
+      .mode { position: relative; }
+
+      .mode input {
+        position: absolute;
+        opacity: 0;
+        pointer-events: none;
+      }
+
+      .mode span {
+        display: block;
+        padding: 7px 2px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: rgba(255, 255, 255, 0.05);
+        font-size: 11px;
+        text-align: center;
+        cursor: pointer;
+        transition: background 0.15s, border-color 0.15s;
+      }
+
+      .mode span:hover { border-color: rgba(127, 196, 232, 0.4); }
+
+      .mode input:checked + span {
+        background: rgba(127, 196, 232, 0.2);
+        border-color: rgba(127, 196, 232, 0.65);
+        color: #fff;
+      }
+
+      .mode input:focus-visible + span {
+        outline: 2px solid var(--accent);
+        outline-offset: 1px;
+      }
+
       .presets { display: flex; flex-direction: column; gap: 6px; }
 
       button {
@@ -157,6 +203,259 @@
 
       #stats span { color: var(--text); font-variant-numeric: tabular-nums; }
 
+      .explain-btn {
+        width: 100%;
+        text-align: center;
+        background: rgba(255, 138, 31, 0.14);
+        border-color: rgba(255, 138, 31, 0.5);
+        color: #ffd2a6;
+      }
+
+      .explain-btn:hover,
+      .explain-btn.on {
+        background: rgba(255, 138, 31, 0.26);
+        border-color: rgba(255, 138, 31, 0.85);
+      }
+
+      [hidden] { display: none !important; }
+
+      /* ---- Explanation: the side panel steps aside; a chain strip, a white
+         caption card and a diagram panel lie over the 3D view. ---- */
+
+      #panel, #hint { transition: opacity 0.3s ease, transform 0.3s ease; }
+
+      body.explaining #panel,
+      body.explaining #hint {
+        opacity: 0;
+        transform: translateX(-12px);
+        pointer-events: none;
+      }
+
+      .enter { animation: explain-enter 0.6s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
+
+      @keyframes explain-enter {
+        from { opacity: 0; transform: translateX(-40px); }
+        to { opacity: 1; transform: none; }
+      }
+
+      #explainChain {
+        position: fixed;
+        top: 16px;
+        left: 50%;
+        transform: translateX(-50%);
+        display: flex;
+        align-items: center;
+        max-width: calc(100vw - 32px);
+      }
+
+      .chain-step {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 12px;
+        border: 1.5px solid #d9dee4;
+        border-radius: 10px;
+        background: #fff;
+        color: #1f4e79;
+        font-size: 12.5px;
+        font-weight: 700;
+        white-space: nowrap;
+        visibility: hidden;
+        opacity: 0;
+        transform: translateX(-16px);
+        transition: opacity 0.5s ease, transform 0.5s ease, filter 0.5s ease, border-color 0.3s, box-shadow 0.3s;
+      }
+
+      .chain-step b { color: #f0932b; }
+      .chain-step.shown { visibility: visible; opacity: 1; transform: none; }
+      .chain-step.past { opacity: 0.3; filter: grayscale(1); }
+
+      .chain-step.active {
+        border-color: #f0932b;
+        box-shadow: 0 0 0 3px rgba(240, 147, 43, 0.22);
+      }
+
+      .chain-arrow {
+        display: flex;
+        justify-content: center;
+        width: 44px;
+        visibility: hidden;
+        opacity: 0;
+        transition: opacity 0.5s ease, filter 0.5s ease;
+      }
+
+      .chain-arrow.shown { visibility: visible; opacity: 1; }
+      .chain-arrow.past { opacity: 0.3; filter: grayscale(1); }
+
+      .chain-loop {
+        margin-left: 12px;
+        padding: 5px 10px;
+        border: 1.5px dashed #f0932b;
+        border-radius: 10px;
+        background: #fff;
+        color: #f0932b;
+        font-size: 12px;
+        font-weight: 700;
+        white-space: nowrap;
+        visibility: hidden;
+        opacity: 0;
+        transition: opacity 0.5s ease;
+      }
+
+      .chain-loop.shown { visibility: visible; opacity: 1; }
+
+      #explainDiagram {
+        position: fixed;
+        top: 76px;
+        right: 16px;
+        width: min(46vw, 640px);
+        padding: 10px;
+        border: 1px solid #d9dee4;
+        border-radius: 12px;
+        background: #fff;
+        box-shadow: 0 8px 28px rgba(15, 30, 50, 0.18);
+      }
+
+      #explainDiagram svg { display: block; width: 100%; height: auto; }
+
+      #explainCard {
+        position: fixed;
+        left: 50%;
+        bottom: 20px;
+        transform: translateX(-50%);
+        width: min(600px, calc(100vw - 32px));
+        padding: 12px 18px;
+        border: 1px solid #d9dee4;
+        border-radius: 12px;
+        background: #fff;
+        color: #3a4450;
+        box-shadow: 0 8px 28px rgba(15, 30, 50, 0.18);
+      }
+
+      .explain-head,
+      .explain-foot {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+
+      .explain-head {
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: #f0932b;
+      }
+
+      #explainExit {
+        padding: 3px 10px;
+        border-color: #d9dee4;
+        background: #fff;
+        color: #1f4e79;
+        font-size: 11px;
+      }
+
+      #explainExit:hover { background: #eef3f9; border-color: #c3ccd6; }
+
+      #explainCard h2 {
+        margin: 4px 0 2px;
+        font-size: 20px;
+        font-weight: 700;
+        color: #1f4e79;
+      }
+
+      #explainCard p {
+        margin: 0 0 10px;
+        font-size: 14px;
+        line-height: 1.5;
+        color: #3a4450;
+      }
+
+      #explainCard #explainNotes {
+        margin-top: -4px;
+        padding: 8px 10px;
+        border-radius: 8px;
+        background: #f4f7fa;
+        font-size: 13px;
+        color: #56616d;
+      }
+
+      .explain-foot { font-size: 11px; color: #9aa5b1; }
+
+      .explain-dots { display: flex; gap: 5px; }
+
+      .explain-dots i {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: #d9dee4;
+      }
+
+      .explain-dots i.on { background: #f0932b; }
+
+      #explainLabels {
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+      }
+
+      #explainLabels svg {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+      }
+
+      #explainLabels line { stroke: #f0932b; stroke-width: 1.5; }
+      #explainLabels circle { fill: #f0932b; stroke: #fff; stroke-width: 1.5; }
+
+      #explainLabels path.signal {
+        fill: none;
+        stroke: #f0932b;
+        stroke-width: 2.5;
+        stroke-dasharray: 9 7;
+        stroke-linecap: round;
+      }
+
+      .explain-tag {
+        position: absolute;
+        left: 0;
+        top: 0;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 3px 8px;
+        border: 1.5px solid #f0932b;
+        border-radius: 6px;
+        background: #fff;
+        color: #1f4e79;
+        font-size: 12px;
+        font-weight: 600;
+        white-space: nowrap;
+      }
+
+      /* An LDR's reading, in the LDR sensors step. */
+      .explain-tag .reading,
+      .explain-tag .value { display: none; }
+
+      #explainLabels.readings .explain-tag .reading {
+        display: block;
+        width: 56px;
+        height: 8px;
+        overflow: hidden;
+        border-radius: 4px;
+        background: #eef2f6;
+      }
+
+      .explain-tag .reading i { display: block; width: 0; height: 100%; background: #f0932b; }
+
+      #explainLabels.readings .explain-tag .value {
+        display: block;
+        min-width: 30px;
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+      }
+
       #hint {
         position: fixed;
         right: 16px;
@@ -175,21 +474,22 @@
       <p class="sub">30-storey curtain wall &middot; 160 modules &middot; north face</p>
 
       <fieldset>
+        <legend>Scene</legend>
+        <div class="modes" role="radiogroup" aria-label="Scene">
+          <label class="mode"><input type="radio" name="mode" value="day" /><span>Normal day</span></label>
+          <label class="mode"><input type="radio" name="mode" value="hot" checked /><span>Hot afternoon</span></label>
+          <label class="mode"><input type="radio" name="mode" value="night" /><span>Night</span></label>
+          <label class="mode"><input type="radio" name="mode" value="storm" /><span>Storm</span></label>
+        </div>
+        <p id="modeNote" class="sun-note"></p>
+      </fieldset>
+
+      <fieldset id="sunControls">
         <legend>Sun</legend>
 
         <label class="row">
-          <span class="row-head"><b>Azimuth</b><span id="azOut">135&deg;</span></span>
-          <input id="az" type="range" min="0" max="360" step="1" value="135" />
-        </label>
-
-        <label class="row">
-          <span class="row-head"><b>Elevation</b><span id="elOut">38&deg;</span></span>
-          <input id="el" type="range" min="0" max="90" step="1" value="38" />
-        </label>
-
-        <label class="row">
-          <span class="row-head"><b>Time of day</b><span id="todOut">14:00</span></span>
-          <input id="tod" type="range" min="5" max="19" step="0.05" value="14" />
+          <span class="row-head"><b>East &rarr; west</b><span id="todOut">15:30</span></span>
+          <input id="tod" type="range" min="6" max="18" step="0.05" value="15.5" />
         </label>
       </fieldset>
 
@@ -201,10 +501,20 @@
           Drive all modules manually
         </label>
 
+        <label class="checkbox">
+          <input id="animate" type="checkbox" />
+          Demo: cycle open &harr; closed
+        </label>
+
         <label class="row">
           <span class="row-head"><b>Closed &rarr; open</b><span id="stateOut">1.00</span></span>
           <input id="state" type="range" min="0" max="1" step="0.01" value="1" disabled />
         </label>
+      </fieldset>
+
+      <fieldset>
+        <legend>Explain</legend>
+        <button id="explainBtn" class="explain-btn">How the snowflake works</button>
       </fieldset>
 
       <fieldset>
@@ -229,6 +539,30 @@
     </div>
 
     <div id="hint">drag to orbit &middot; scroll to zoom</div>
+
+    <div id="explainChain" hidden aria-label="Control chain so far"></div>
+
+    <div id="explainDiagram" hidden>
+      <svg id="explainDiagramSvg" aria-hidden="true"></svg>
+    </div>
+
+    <div id="explainLabels" hidden></div>
+
+    <div id="explainCard" hidden>
+      <div class="explain-head">
+        <span id="explainCount"></span>
+        <button id="explainExit">Exit</button>
+      </div>
+      <div id="explainBody">
+        <h2 id="explainTitle"></h2>
+        <p id="explainText"></p>
+        <p id="explainNotes" hidden></p>
+      </div>
+      <div class="explain-foot">
+        <span id="explainHint"></span>
+        <span id="explainDots" class="explain-dots"></span>
+      </div>
+    </div>
 
     <script type="module" src="/src/main.js"></script>
   </body>

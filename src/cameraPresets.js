@@ -37,14 +37,18 @@ export function createCameraPresets({ camera, controls, facade, towerHeight }) {
   let active = null;
   let elapsed = 0;
 
-  function goTo(name) {
-    const preset = presets[name];
-    if (!preset) return;
+  /** Fly the eye and the orbit target to any view. */
+  function flyTo(position, target) {
     fromPos.copy(camera.position);
     fromTarget.copy(controls.target);
-    active = preset;
+    active = { position: position.clone(), target: target.clone() };
     elapsed = 0;
     controls.enabled = false;
+  }
+
+  function goTo(name) {
+    const preset = presets[name];
+    if (preset) flyTo(preset.position, preset.target);
   }
 
   function update(dt) {
@@ -56,6 +60,9 @@ export function createCameraPresets({ camera, controls, facade, towerHeight }) {
 
     camera.position.lerpVectors(fromPos, active.position, e);
     controls.target.lerpVectors(fromTarget, active.target, e);
+    // The controls are paused while the tween runs, so turn the eye here -- or
+    // it would slide facing the old view, then snap round when the tween ends.
+    camera.lookAt(controls.target);
 
     if (t >= 1) {
       active = null;
@@ -66,5 +73,5 @@ export function createCameraPresets({ camera, controls, facade, towerHeight }) {
   /** True while a tween owns the camera, so the main loop can skip damping. */
   const isAnimating = () => active !== null;
 
-  return { goTo, update, isAnimating, presets };
+  return { goTo, flyTo, update, isAnimating, presets };
 }

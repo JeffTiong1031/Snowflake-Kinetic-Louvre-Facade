@@ -1,13 +1,15 @@
 /**
- * Renderer, camera, controls, lighting, procedural environment map, ground.
+ * Renderer, camera, controls, lighting, sky, ground.
  *
- * The environment map is generated in code from RoomEnvironment via PMREM --
- * no image files, no network fetches.
+ * The sky, and the environment map rendered from it, are generated in code
+ * (sky.js) -- no image files, no network fetches.
  */
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
+import { buildEnvironment } from './environment.js';
+import { buildCity } from './city.js';
+import { createSky } from './sky.js';
 import * as C from './constants.js';
 
 export function createScene(canvas) {
@@ -21,18 +23,13 @@ export function createScene(canvas) {
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1.0;
   renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.shadowMap.type = THREE.PCFShadowMap;
+  // Counted over the whole frame, post-processing passes included; the frame loop resets it.
+  renderer.info.autoReset = false;
 
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x9fb6cc);
-  scene.fog = new THREE.Fog(0x9fb6cc, 300, 900);
-
-  // --- Procedural environment map for glass reflections ---
-  const pmrem = new THREE.PMREMGenerator(renderer);
-  pmrem.compileEquirectangularShader();
-  const envRT = pmrem.fromScene(new RoomEnvironment(), 0.04);
-  scene.environment = envRT.texture;
-  pmrem.dispose();
+  // Its colour follows the sky's horizon: the sun controller sets it every frame.
+  scene.fog = new THREE.Fog(0x9fb6cc, C.FOG_NEAR, C.FOG_FAR);
 
   const camera = new THREE.PerspectiveCamera(
     C.CAMERA_FOV,
@@ -53,32 +50,27 @@ export function createScene(canvas) {
   controls.target.set(0, 45, 0);
   controls.update();
 
+  // --- Sky, and the environment map it lights and reflects in ---
+  const sky = createSky(renderer, scene, camera);
+
   // --- Lighting ---
-  const sunLight = new THREE.DirectionalLight(0xffffff, 3.0);
+  // The sun controller drives intensities, the shadow box and its biases.
+  const sunLight = new THREE.DirectionalLight(0xffffff, C.SUN_INTENSITY);
   sunLight.castShadow = true;
   sunLight.shadow.mapSize.set(C.SHADOW_MAP_SIZES[0], C.SHADOW_MAP_SIZES[0]);
-  sunLight.shadow.bias = -0.0006;
-  sunLight.shadow.normalBias = 0.02;
   scene.add(sunLight);
   scene.add(sunLight.target);
 
-  const hemiLight = new THREE.HemisphereLight(0xbcd8f2, 0x4a4438, 0.9);
+  const hemiLight = new THREE.HemisphereLight(0xbcd8f2, 0x4a4438, C.FILL_HEMI_DAY);
   scene.add(hemiLight);
 
-  // --- Ground ---
-  const ground = new THREE.Mesh(
-    new THREE.PlaneGeometry(1400, 1400),
-    new THREE.MeshStandardMaterial({
-      color: C.GROUND_COLOR,
-      roughness: 0.95,
-      metalness: 0.0,
-    })
-  );
-  ground.rotation.x = -Math.PI / 2;
-  ground.receiveShadow = true;
-  scene.add(ground);
+  // Flat ambient fill on top of the sky/ground hemisphere, so metal faces
+  // turned away from the sun still read as metal rather than going black.
+  const ambientLight = new THREE.AmbientLight(0xffffff, C.FILL_AMBIENT);
+  scene.add(ambientLight);
 
-  addNeighbours(scene);
+  const city = buildCity(scene);
+  buildEnvironment(scene, city.isBlocked);
 
   window.addEventListener('resize', () => {
     camera.aspect = window.innerWidth / window.innerHeight;
@@ -86,41 +78,5 @@ export function createScene(canvas) {
     renderer.setSize(window.innerWidth, window.innerHeight);
   });
 
-  return { renderer, scene, camera, controls, sunLight, hemiLight };
-}
-
-/** A handful of low-detail blocks, for scale and for something to reflect. */
-function addNeighbours(scene) {
-  const material = new THREE.MeshStandardMaterial({
-    color: C.NEIGHBOUR_COLOR,
-    roughness: 0.75,
-    metalness: 0.15,
-  });
-
-  // Deliberately kept clear of the module face (-Z) so nothing occludes it.
-  const blocks = [
-    { x: -78, z: 26, w: 30, d: 30, h: 62 },
-    { x: 74, z: -12, w: 26, d: 34, h: 48 },
-    { x: 12, z: 96, w: 40, d: 28, h: 74 },
-    { x: -58, z: 84, w: 24, d: 24, h: 36 },
-    { x: 96, z: 62, w: 32, d: 30, h: 55 },
-    { x: -104, z: -46, w: 28, d: 26, h: 41 },
-  ];
-
-  const geo = new THREE.BoxGeometry(1, 1, 1);
-  const mesh = new THREE.InstancedMesh(geo, material, blocks.length);
-  mesh.castShadow = true;
-  mesh.receiveShadow = true;
-
-  const m = new THREE.Matrix4();
-  blocks.forEach((b, i) => {
-    m.compose(
-      new THREE.Vector3(b.x, b.h / 2, b.z),
-      new THREE.Quaternion(),
-      new THREE.Vector3(b.w, b.h, b.d)
-    );
-    mesh.setMatrixAt(i, m);
-  });
-  mesh.instanceMatrix.needsUpdate = true;
-  scene.add(mesh);
+  return { renderer, scene, camera, controls, sunLight, hemiLight, ambientLight, city, sky };
 }
