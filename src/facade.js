@@ -267,8 +267,8 @@ export function buildFacade(scene) {
 
   /**
    * @param {Float32Array} states One value per gap of each module, module by
-   *   module (MODULE_COUNT * ARM_COUNT): 0 = closed, 1 = open. Each gap has its
-   *   own carriage, so each gap's slats can stand at their own angle.
+   *   module (MODULE_COUNT * ARM_COUNT): 0 = closed, 1 = open. All six gaps
+   *   of a module share one angle driven together from the central hub.
    * @returns {number} How many modules were rewritten (for the stats readout).
    */
   function updateBlades(states) {

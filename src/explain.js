@@ -560,7 +560,7 @@ export function createExplainMode({ scene, camera, canvas, facade, flyTo, onExit
       view: 'gap',
       show: ['slats', 'hinges'],
       tau: 0.25,
-      pose: (g, t) => (g === focusGap ? stroke(t) : 1),
+      pose: (g, t) => stroke(t),
     },
     {
       title: 'The drive behind each gap',
@@ -571,7 +571,7 @@ export function createExplainMode({ scene, camera, canvas, facade, flyTo, onExit
       view: 'side',
       show: ['driveFocus'],
       tau: 0.25,
-      pose: (g, t) => (g === focusGap ? stroke(t) : 1),
+      pose: (g, t) => stroke(t),
     },
     {
       title: 'Six carriages, moved together',

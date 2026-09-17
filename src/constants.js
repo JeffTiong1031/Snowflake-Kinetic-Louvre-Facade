@@ -383,12 +383,15 @@ export const GRID_BASE_HEIGHT = 52000;
  * ------------------------------------------------------------------ */
 
 /**
- * The louvres move only when the sun does. Each gap's carriage opens its slats
- * as wide as it can while the direct sun they let through stays within this
- * share of full sun (traced on the real slats: see louvreControl.js). 0 keeps
- * every sunlit gap shut flat; the sun off the facade opens them right up.
+ * The louvres move with the sun based on sunlight intensity. All six carriages
+ * of each module are driven together by its motor: closing slightly in early morning,
+ * down to a small gap opening at peak noon intensity, and gradually opening back up
+ * into evening.
  */
 export const SUN_LEAK_BUDGET = 0.05;
+
+/** Smallest gap opening fraction (0..1) at peak solar noon (leaving a small slit opening). */
+export const LOUVRE_MIN_GAP_OPENING = 0.10;
 
 /** Seconds for a gap to close most of the way to its new angle (damping). */
 export const BLADE_RESPONSE_TAU = 0.55;

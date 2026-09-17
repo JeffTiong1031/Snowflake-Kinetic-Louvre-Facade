@@ -7,12 +7,10 @@
  * Three scenes (params.mode):
  *   - 'day'   normal daylight: a soft, hazy sun, no glare; louvres fully open.
  *   - 'hot'   a hot afternoon: strong sun wherever it is put, and the louvres
- *             track it -- each gap's slats open as wide as they can while
- *             keeping all but SUN_LEAK_BUDGET of the direct sun out
- *             (gapOpenAngles), ease there, and stop. They move again only when
- *             the sun is moved. Every module on the flat face sees the same
- *             sun, so every module takes the same pose; the six gaps of each
- *             differ, since each meets the sun differently.
+ *             track it based on sunlight intensity -- closing slightly in early
+ *             morning, down to a small gap opening at noon peak sun, and gradually
+ *             opening back up into evening. All six gaps of each module share
+ *             a single angle driven together from the central hub.
  *   - 'night' a faint cool moon; louvres fully open.
  *   - 'storm' overcast, no sun, the rain closing the view in (the rain and
  *             wind themselves are in weather.js); louvres fully open, edge-on
@@ -319,30 +317,32 @@ export function createSunController({
     worker = null;
   }
 
+  /** Peak solar elevation in degrees (at solar noon on the June solstice). */
+  const NOON_ELEVATION_DEG = 69.7;
+
   /**
-   * Each gap's widest angle within the sun budget, as a 0..1 state. Every
-   * module takes the same, since the face is flat. Close to the horizon the
-   * sun is feeble, so over the last few degrees the louvres open the rest of
-   * the way.
+   * Modulates the louvre opening based on sunlight intensity hitting the facade.
+   * In early morning (low intensity), the louvres close slightly; at solar noon
+   * (peak intensity), they close down to a small gap opening (C.LOUVRE_MIN_GAP_OPENING);
+   * as the sun descends toward evening (from 12 to 7 or 8 PM), they gradually open back up.
+   * All six gaps of each module share this single unified target.
    */
   function computeTargets(params) {
     sunLocal.copy(sunDir).applyQuaternion(toModule);
-    if (!tracing && !(sunLocal.distanceToSquared(requestedSun) < 1e-12)) {
-      requestedSun.copy(sunLocal);
-      if (worker) {
-        tracing = true;
-        worker.postMessage({ x: sunLocal.x, y: sunLocal.y, z: sunLocal.z });
-      } else {
-        gapOpenAngles(sunLocal, gapAngles);
-      }
+
+    let sharedTarget = 1.0;
+    if (params.elevation > 0 && sunLocal.z > 0) {
+      const elRad = params.elevation * DEG;
+      // Normalized sunlight intensity: 0 at horizon, 1.0 at peak solar noon.
+      const intensity = clamp01(Math.sin(elRad) / Math.sin(NOON_ELEVATION_DEG * DEG));
+      const minOpening = C.LOUVRE_MIN_GAP_OPENING ?? 0.10;
+      sharedTarget = 1.0 - (1.0 - minOpening) * Math.pow(intensity, 1.25);
     }
 
-    const horizon = clamp01(params.elevation / C.HORIZON_FADE_DEG);
-    for (let g = 0; g < gaps; g++) {
-      const tight = clamp01((gapAngles[g] - closedAngle) / travel);
-      gapTargets[g] = 1 - (1 - tight) * horizon;
-    }
-    for (let m = 0; m < C.MODULE_COUNT; m++) targets.set(gapTargets, m * gaps);
+    const sharedAngle = closedAngle + sharedTarget * travel;
+    gapAngles.fill(sharedAngle);
+    gapTargets.fill(sharedTarget);
+    targets.fill(sharedTarget);
   }
 
   /* -------------------------------------------------------------- *
