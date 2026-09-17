@@ -212,47 +212,18 @@ function rodBetween(p0, p1, r) {
  *
  * @param omitTips arms whose tip panel to leave out -- for a module whose
  *   tips are drawn separately (buildTipGeometry).
+ * @param omitHub if true, the hub plate, PV face and bolt heads are left out
+ *   -- for a module whose hub is drawn separately (buildHubGeometry).
  */
-export function buildModuleStaticGeometry({ omitTips = [] } = {}) {
+export function buildModuleStaticGeometry({ omitTips = [], omitHub = false } = {}) {
   const alu = [];
   const pv = [];
 
   // --- Central hexagonal hub plate, with a PV face set into its frame. ---
-  // CylinderGeometry puts its first vertex on +Z, and rotateX(90deg) maps that
-  // to -Y -- so the hexagon lands 90deg behind where the raw angles suggest.
-  // HUB_SPIN takes that out, seating a hub VERTEX under every spine.
-  const hub = new THREE.CylinderGeometry(
-    C.HUB_RADIUS * C.MM, C.HUB_RADIUS * C.MM, C.HUB_THICKNESS * C.MM, 6
-  );
-  hub.rotateX(Math.PI / 2);
-  hub.rotateZ(HUB_SPIN);
-  hub.translate(0, 0, C.HUB_Z_OFFSET * C.MM);
-  alu.push(hub);
-
-  const hubPv = new THREE.CylinderGeometry(
-    (C.HUB_RADIUS - C.HUB_PV_INSET) * C.MM,
-    (C.HUB_RADIUS - C.HUB_PV_INSET) * C.MM,
-    C.HUB_PV_RISE * C.MM,
-    6
-  );
-  hubPv.rotateX(Math.PI / 2);
-  hubPv.rotateZ(HUB_SPIN);
-  hubPv.translate(0, 0, (C.HUB_Z_OFFSET + C.HUB_THICKNESS / 2 + C.HUB_PV_RISE / 2) * C.MM);
-  pv.push(hubPv);
-
-  // --- Six bolt heads, one per hexagon corner, riding on the hub face. ---
-  for (let i = 0; i < C.BOLT_COUNT; i++) {
-    const a = (i / C.BOLT_COUNT) * Math.PI * 2 + ARM_PHASE;
-    const bolt = new THREE.CylinderGeometry(
-      C.BOLT_HEAD_RADIUS * C.MM, C.BOLT_HEAD_RADIUS * C.MM, C.BOLT_HEAD_HEIGHT * C.MM, 6
-    );
-    bolt.rotateX(Math.PI / 2);
-    bolt.translate(
-      Math.cos(a) * C.BOLT_CIRCLE_RADIUS * C.MM,
-      Math.sin(a) * C.BOLT_CIRCLE_RADIUS * C.MM,
-      (C.HUB_Z_OFFSET + C.HUB_THICKNESS / 2 + C.BOLT_HEAD_HEIGHT / 2) * C.MM
-    );
-    alu.push(bolt);
+  if (!omitHub) {
+    const { hubAlu, hubPvParts } = hubParts();
+    alu.push(...hubAlu);
+    pv.push(...hubPvParts);
   }
 
   // --- Six spines, each a PV strip in an aluminium frame, ending in a square PV
@@ -390,6 +361,58 @@ export function buildTipGeometry(arms) {
   return {
     aluminium: mergeParts(parts.map((p) => p.frame)),
     pv: mergeParts(parts.map((p) => p.cell)),
+  };
+}
+
+/** The hub plate, PV face and bolt heads, split by material. */
+function hubParts() {
+  // CylinderGeometry puts its first vertex on +Z, and rotateX(90deg) maps that
+  // to -Y -- so the hexagon lands 90deg behind where the raw angles suggest.
+  // HUB_SPIN takes that out, seating a hub VERTEX under every spine.
+  const hub = new THREE.CylinderGeometry(
+    C.HUB_RADIUS * C.MM, C.HUB_RADIUS * C.MM, C.HUB_THICKNESS * C.MM, 6
+  );
+  hub.rotateX(Math.PI / 2);
+  hub.rotateZ(HUB_SPIN);
+  hub.translate(0, 0, C.HUB_Z_OFFSET * C.MM);
+
+  const hubPv = new THREE.CylinderGeometry(
+    (C.HUB_RADIUS - C.HUB_PV_INSET) * C.MM,
+    (C.HUB_RADIUS - C.HUB_PV_INSET) * C.MM,
+    C.HUB_PV_RISE * C.MM,
+    6
+  );
+  hubPv.rotateX(Math.PI / 2);
+  hubPv.rotateZ(HUB_SPIN);
+  hubPv.translate(0, 0, (C.HUB_Z_OFFSET + C.HUB_THICKNESS / 2 + C.HUB_PV_RISE / 2) * C.MM);
+
+  const hubAlu = [hub];
+  const hubPvParts = [hubPv];
+
+  // Six bolt heads, one per hexagon corner, riding on the hub face.
+  for (let i = 0; i < C.BOLT_COUNT; i++) {
+    const a = (i / C.BOLT_COUNT) * Math.PI * 2 + ARM_PHASE;
+    const bolt = new THREE.CylinderGeometry(
+      C.BOLT_HEAD_RADIUS * C.MM, C.BOLT_HEAD_RADIUS * C.MM, C.BOLT_HEAD_HEIGHT * C.MM, 6
+    );
+    bolt.rotateX(Math.PI / 2);
+    bolt.translate(
+      Math.cos(a) * C.BOLT_CIRCLE_RADIUS * C.MM,
+      Math.sin(a) * C.BOLT_CIRCLE_RADIUS * C.MM,
+      (C.HUB_Z_OFFSET + C.HUB_THICKNESS / 2 + C.BOLT_HEAD_HEIGHT / 2) * C.MM
+    );
+    hubAlu.push(bolt);
+  }
+
+  return { hubAlu, hubPvParts };
+}
+
+/** Just the hub plate + PV face + bolt heads, split by material like buildModuleStaticGeometry. */
+export function buildHubGeometry() {
+  const { hubAlu, hubPvParts } = hubParts();
+  return {
+    aluminium: mergeParts(hubAlu),
+    pv: mergeParts(hubPvParts),
   };
 }
 
