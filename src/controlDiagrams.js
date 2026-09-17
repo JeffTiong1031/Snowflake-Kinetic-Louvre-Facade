@@ -1,8 +1,9 @@
 /**
  * The control system's flat diagrams, for the explanation's diagram panel:
- * the Arduino reading the four LDRs and deciding, the SG90 servo taking its
- * PWM signal, the hub linkage, and the trapezoidal blades tilting. Flat
- * vector SVG, built at runtime -- no image files.
+ * the controller deciding the blade angle, the position command to the DCL-10
+ * actuator, the central drive disc, eccentric pins, slotted rods, blade
+ * crank arms, slider calculation, and the full opening/closing sequences.
+ * Flat vector SVG, built at runtime -- no image files.
  *
  * Each diagram is a group with the viewBox it is shown through, and a
  * tick(t) that animates it, t in seconds since its step began.
@@ -21,23 +22,13 @@ const FILL = '#DCE9F5';
 const GREY = '#9AA5B1';
 const INK = '#3A4450';
 
-/** The angle the Arduino settles on in the worked example, degrees of blade tilt. */
-export const TARGET_ANGLE = 30;
-
-/**
- * Blade tilt loops, seconds: the linkage step drives to the target, the
- * louvre step sweeps the full 0-45 range. The 3D slats follow the same.
- */
-export const LINKAGE_CYCLE = { to: TARGET_ANGLE, up: 1.2, hold: 1.6, down: 1.0, rest: 0.4 };
-export const LOUVRE_CYCLE = { to: 45, up: 1.4, hold: 1.2, down: 1.4, rest: 0.6 };
-
 const clamp01 = (x) => (x < 0 ? 0 : x > 1 ? 1 : x);
 const ease = (x) => {
   const t = clamp01(x);
   return t * t * (3 - 2 * t);
 };
 
-/** Blade tilt at time t through one of the loops above: [degrees, moving]. */
+/** Blade tilt at time t through one of the loops: [degrees, moving]. */
 export function tiltCycle(t, { to, up, hold, down, rest }) {
   const c = t % (up + hold + down + rest);
   if (c < up) return [to * ease(c / up), true];
@@ -60,531 +51,922 @@ function label(parent, x, y, content, attrs = {}) {
 }
 
 const pts = (list) => list.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(' ');
-const rectAttrs = ({ x, y, w, h }) => ({ x, y, width: w, height: h });
-
-/** A polyline with its corners rounded to radius r, as path data. */
-function roundedPath(points, r) {
-  let d = `M${points[0][0]},${points[0][1]}`;
-  for (let i = 1; i < points.length - 1; i++) {
-    const [px, py] = points[i - 1];
-    const [x, y] = points[i];
-    const [nx, ny] = points[i + 1];
-    const k1 = Math.min(r, Math.hypot(x - px, y - py) / 2) / Math.hypot(x - px, y - py);
-    const k2 = Math.min(r, Math.hypot(nx - x, ny - y) / 2) / Math.hypot(nx - x, ny - y);
-    d += ` L${x - (x - px) * k1},${y - (y - py) * k1} Q${x},${y} ${x + (nx - x) * k2},${y + (ny - y) * k2}`;
-  }
-  const [lx, ly] = points[points.length - 1];
-  return `${d} L${lx},${ly}`;
-}
 
 /** A point at radius r, angle a (radians, anticlockwise from +x) about (cx, cy), on screen. */
 const polar = ([cx, cy], r, a) => [cx + r * Math.cos(a), cy - r * Math.sin(a)];
 
-/** Offset by d along angle a's tangent (anticlockwise), on screen. */
-const along = ([x, y], d, a) => [x - d * Math.sin(a), y - d * Math.cos(a)];
-
 const armAngle = (i) => (i * 60 + C.ARM_PHASE_DEG) * DEG;
 
-/* ------------------------------------------------------------------ *
- * The Arduino Uno, upright: USB and power on top, power and analog
- * headers down the left, digital down the right
- * ------------------------------------------------------------------ */
+/* ================================================================== *
+ * Shared base drawing: the hexagonal hub, 6 arms, disc, pins, rods,
+ * and 4 blades per arm region.
+ * ================================================================== */
 
-function drawUno(parent, x, y) {
-  const g = svg('g', { transform: `translate(${x} ${y})` }, parent);
-  svg('rect', { x: 0, y: 0, width: 240, height: 340, rx: 14, fill: FILL, stroke: BLUE, 'stroke-width': 2 }, g);
-  svg('rect', { x: 26, y: -18, width: 58, height: 52, rx: 3, fill: '#C9D3DD', stroke: BLUE, 'stroke-width': 1.5 }, g);
-  svg('rect', { x: 162, y: -12, width: 46, height: 58, rx: 5, fill: INK }, g);
+/**
+ * Draw the full mechanism in face-on view.
+ * Returns handles to all animated parts so each diagram mode can
+ * highlight / zoom / animate them independently.
+ */
+function drawMechanism(g, centre, scale) {
+  const k = scale;
+  const [cx, cy] = centre;
 
-  const header = (hx, hy, n) => {
-    svg('rect', { x: hx, y: hy, width: 14, height: 16 * n, rx: 2, fill: INK }, g);
-    for (let k = 0; k < n; k++) {
-      svg('rect', { x: hx + 4, y: hy + 5 + 16 * k, width: 6, height: 6, fill: '#8B96A2' }, g);
-    }
-  };
-  header(4, 84, 8); // power
-  header(4, 212, 6); // analog A0-A5
-  header(222, 60, 8); // digital 0-7
-  header(222, 200, 8); // digital 8-13
-
-  // ICSP header: its bottom row carries GND and 5V.
-  svg('rect', { x: 100, y: 296, width: 44, height: 30, rx: 2, fill: INK }, g);
-  for (const px of [104, 118, 132]) {
-    for (const py of [299, 313]) svg('rect', { x: px, y: py, width: 8, height: 8, fill: '#8B96A2' }, g);
-  }
-
-  // The ATmega328P, the crystal, the reset button.
-  svg('rect', { x: 98, y: 130, width: 46, height: 150, rx: 3, fill: INK }, g);
-  for (let k = 0; k < 14; k++) {
-    for (const [x1, x2] of [[92, 98], [144, 150]]) {
-      svg('line', { x1, y1: 137 + k * 10, x2, y2: 137 + k * 10, stroke: '#8B96A2', 'stroke-width': 2 }, g);
-    }
-  }
-  svg('circle', { cx: 121, cy: 138, r: 3.5, fill: '#5B6673' }, g);
-  svg('rect', { x: 60, y: 176, width: 14, height: 34, rx: 7, fill: '#C9D3DD', stroke: BLUE, 'stroke-width': 1.2 }, g);
-  svg('rect', { x: 180, y: 70, width: 22, height: 22, rx: 3, fill: '#C9D3DD', stroke: BLUE, 'stroke-width': 1.2 }, g);
-  svg('circle', { cx: 191, cy: 81, r: 6, fill: '#fff', stroke: BLUE, 'stroke-width': 1 }, g);
-
-  const led = svg('rect', { x: 186, y: 112, width: 14, height: 8, rx: 2, fill: ORANGE }, g);
-  label(g, 120, 110, 'UNO', {
-    'text-anchor': 'middle',
-    'font-size': 30,
-    'font-weight': 800,
-    'letter-spacing': 2,
-    fill: BLUE,
-  });
-
-  return {
-    led,
-    analog: [0, 1, 2, 3].map((k) => [x + 11, y + 220 + 16 * k]),
-    pin9: [x + 229, y + 224],
-    gnd: [x + 122, y + 317],
-    v5: [x + 136, y + 317],
-  };
-}
-
-/* ------------------------------------------------------------------ *
- * The Arduino analyses and decides
- *
- * The four sensor signals come in from the panel's left edge, where the
- * explanation joins them to the LDRs in the 3D view (inputs).
- * ------------------------------------------------------------------ */
-
-function arduinoDiagram(g) {
-  const uno = drawUno(g, 170, 40);
-
-  const flows = uno.analog.map(([x, y]) => {
-    svg('line', { x1: 0, y1: y, x2: x, y2: y, stroke: '#E6EBF0', 'stroke-width': 5 }, g);
-    return svg('line', {
-      x1: 0,
-      y1: y,
-      x2: x,
-      y2: y,
-      stroke: ORANGE,
-      'stroke-width': 2.5,
-      'stroke-dasharray': '9 7',
-      opacity: 0,
-    }, g);
-  });
-  label(g, 160, uno.analog[0][1] - 14, 'A0–A3', { 'text-anchor': 'end', 'font-size': 13, 'font-weight': 700, fill: BLUE });
-
-  // The decision -- kept short: a step shows at most 25 words.
-  const callout = svg('g', { opacity: 0 }, g);
-  svg('rect', { x: 432, y: 120, width: 178, height: 124, rx: 10, fill: '#fff', stroke: BLUE, 'stroke-width': 1.5 }, callout);
-  svg('path', { d: 'M433,168 L416,182 L433,196', fill: '#fff', stroke: BLUE, 'stroke-width': 1.5 }, callout);
-  const lines = [
-    label(callout, 446, 158, 'max(A0…A3) = A0', { 'font-family': MONO, 'font-size': 14.5, fill: BLUE }),
-    label(callout, 446, 190, '→ upper-left', { 'font-family': MONO, 'font-size': 14.5, fill: BLUE }),
-    label(callout, 446, 222, '→ ', { 'font-family': MONO, 'font-size': 14.5, fill: BLUE }),
-  ];
-  const angle = svg('tspan', { fill: ORANGE, 'font-weight': 700 }, lines[2]);
-  angle.textContent = '0°';
-
-  return {
-    viewBox: [0, 0, 620, 400],
-    inputs: uno.analog.map(([, y]) => [0, y]),
-    rest: 3,
-    tick(t) {
-      flows.forEach((flow, i) => {
-        flow.setAttribute('opacity', ease((t - 0.3 - i * 0.12) / 0.35));
-        flow.setAttribute('stroke-dashoffset', -t * 40);
-      });
-      callout.setAttribute('opacity', ease((t - 0.75) / 0.35));
-      lines.forEach((line, i) => line.setAttribute('opacity', ease((t - 0.9 - i * 0.3) / 0.3)));
-      angle.textContent = `${Math.round(TARGET_ANGLE * ease((t - 1.5) / 0.8))}°`;
-      uno.led.setAttribute('opacity', t % 0.5 < 0.25 ? 1 : 0.25);
-    },
-  };
-}
-
-/* ------------------------------------------------------------------ *
- * The servo receives the signal and rotates
- * ------------------------------------------------------------------ */
-
-function servoDiagram(g) {
-  const uno = drawUno(g, 180, 106);
-  const [px, Y] = uno.pin9;
-  const BODY = { x: 860, y: 286, w: 250, h: 96 };
-  const SHAFT = [1050, 334];
-
-  // Supply: 5V and GND from the ICSP header, round under the board.
-  const wire = (points, color) =>
-    svg('path', { d: roundedPath(points, 10), fill: 'none', stroke: color, 'stroke-width': 3, 'stroke-linejoin': 'round' }, g);
-  wire([[BODY.x, 342], [700, 342], [700, 490], [uno.v5[0], 490], uno.v5], '#D64541');
-  wire([[BODY.x, 350], [716, 350], [716, 506], [uno.gnd[0], 506], uno.gnd], '#7A5230');
-  label(g, uno.v5[0] + 7, 470, '5V', { 'font-size': 12, 'font-weight': 700, fill: INK });
-  label(g, uno.gnd[0] - 7, 470, 'GND', { 'text-anchor': 'end', 'font-size': 12, 'font-weight': 700, fill: INK });
-
-  // Signal: pin 9 to the servo, carrying the PWM pulse train.
-  svg('line', { x1: px, y1: Y, x2: BODY.x, y2: Y, stroke: ORANGE, 'stroke-width': 3 }, g);
-  const clip = svg('clipPath', { id: 'pwm-window' }, g);
-  svg('rect', { x: px + 12, y: Y - 34, width: BODY.x - px - 24, height: 40 }, clip);
-  const windowed = svg('g', { 'clip-path': 'url(#pwm-window)' }, g);
-  const PERIOD = 64;
-  let d = `M${px - PERIOD},${Y}`;
-  for (let x = px - PERIOD; x < BODY.x + PERIOD; x += PERIOD) d += ' h14 v-22 h9 v22 h41';
-  const train = svg('path', { d, fill: 'none', stroke: ORANGE, 'stroke-width': 2.5, 'stroke-linejoin': 'round' }, windowed);
-  label(g, (px + BODY.x) / 2, Y - 46, 'PWM · pin 9', { 'text-anchor': 'middle', 'font-weight': 700, fill: BLUE });
-
-  // The SG90, from above: mounting ears, body, gear tower, output shaft.
-  svg('rect', { x: BODY.x - 30, y: SHAFT[1] - 20, width: BODY.w + 60, height: 40, rx: 6, fill: FILL, stroke: BLUE, 'stroke-width': 1.5 }, g);
-  for (const hx of [BODY.x - 14, BODY.x + BODY.w + 14]) {
-    svg('circle', { cx: hx, cy: SHAFT[1], r: 6, fill: '#fff', stroke: BLUE, 'stroke-width': 1.2 }, g);
-  }
-  svg('rect', { ...rectAttrs(BODY), rx: 8, fill: '#C9DAEC', stroke: BLUE, 'stroke-width': 2 }, g);
-  label(g, 934, SHAFT[1] + 8, 'SG90', { 'text-anchor': 'middle', 'font-size': 22, 'font-weight': 800, fill: BLUE });
-  svg('circle', { cx: SHAFT[0], cy: SHAFT[1], r: 42, fill: FILL, stroke: BLUE, 'stroke-width': 1.5 }, g);
-
-  // The commanded travel.
-  const arcR = 118;
-  const [ax, ay] = [SHAFT[0] + arcR * Math.sin(TARGET_ANGLE * DEG), SHAFT[1] - arcR * Math.cos(TARGET_ANGLE * DEG)];
-  svg('path', {
-    d: `M${SHAFT[0]},${SHAFT[1] - arcR} A${arcR},${arcR} 0 0 1 ${ax},${ay}`,
-    fill: 'none',
-    stroke: ORANGE,
-    'stroke-width': 2.5,
-    'marker-end': 'url(#arrow-orange)',
-  }, g);
-  label(g, SHAFT[0], SHAFT[1] - arcR - 10, '0°', { 'text-anchor': 'middle', 'font-weight': 700, fill: GREY });
-  label(g, ax + 10, ay - 4, `${TARGET_ANGLE}°`, { 'font-weight': 700, fill: ORANGE });
-
-  // The horn, turning about the shaft.
-  const horn = svg('g', {}, g);
-  const [hx, hy] = SHAFT;
-  svg('path', {
-    d: `M${hx - 18},${hy} A18,18 0 1,0 ${hx + 18},${hy} L${hx + 10},${hy - 92} A10,10 0 0,0 ${hx - 10},${hy - 92} Z`,
-    fill: '#fff',
-    stroke: BLUE,
-    'stroke-width': 1.8,
-    'stroke-linejoin': 'round',
-  }, horn);
-  for (const k of [42, 62, 82]) svg('circle', { cx: hx, cy: hy - k, r: 2.4, fill: BLUE }, horn);
-  svg('circle', { cx: hx, cy: hy, r: 7, fill: FILL, stroke: BLUE, 'stroke-width': 1.5 }, horn);
-
-  return {
-    viewBox: [160, 60, 1000, 480],
-    rest: 2,
-    tick(t) {
-      train.setAttribute('transform', `translate(${(t * 120) % PERIOD} 0)`);
-      // Turn to the commanded angle, hold it, and -- for the loop -- come back.
-      const c = t % 4;
-      const a = c < 0.9 ? TARGET_ANGLE * ease(c / 0.9) : c < 3.4 ? TARGET_ANGLE : TARGET_ANGLE * (1 - ease((c - 3.4) / 0.6));
-      horn.setAttribute('transform', `rotate(${a} ${hx} ${hy})`);
-      uno.led.setAttribute('opacity', t % 0.5 < 0.25 ? 1 : 0.25);
-    },
-  };
-}
-
-/* ------------------------------------------------------------------ *
- * The hub, its linkage and the six trapezoidal blades, face on
- *
- * The servo turns the hub; the hub's spider arms pull a link each; each
- * link swings a crank on its blade's inner end, turning the blade about its
- * radial axis. Hub arm and crank are the same length, so the blades tilt
- * by the angle the hub turns. A blade at 0 stands edge-on to the facade;
- * as it tilts, more of its face shows.
- * ------------------------------------------------------------------ */
-
-function drawLouvreRing(g, centre, k, { linkage }) {
-  const R_ARM = 48 * k;
-  const R_IN = 108 * k;
-  const R_OUT = 245 * k;
-  const W_IN = 20 * k;
-  const W_OUT = 58 * k;
-  const blades = [0, 1, 2, 3, 4, 5].map((i) => armAngle(i) + 30 * DEG);
-
-  for (let i = 0; i < C.ARM_COUNT; i++) {
-    const [x1, y1] = polar(centre, 60 * k, armAngle(i));
-    const [x2, y2] = polar(centre, 258 * k, armAngle(i));
-    svg('line', { x1, y1, x2, y2, stroke: '#EEF2F6', 'stroke-width': 12 * k, 'stroke-linecap': 'round' }, g);
-  }
-  const shadows = blades.map(() => svg('polygon', { fill: INK, 'fill-opacity': 0.16 }, g));
-  const faces = blades.map(() =>
-    svg('polygon', { fill: FILL, stroke: BLUE, 'stroke-width': 1.6, 'stroke-linejoin': 'round' }, g)
-  );
-  for (const b of blades) {
-    const [x1, y1] = polar(centre, R_IN - 6 * k, b);
-    const [x2, y2] = polar(centre, R_OUT + 12 * k, b);
-    svg('line', { x1, y1, x2, y2, stroke: BLUE, 'stroke-width': 1, 'stroke-dasharray': '5 4', opacity: 0.55 }, g);
-  }
-
-  const style = linkage
-    ? { link: ORANGE, linkWidth: 4, arm: BLUE }
-    : { link: GREY, linkWidth: 2.5, arm: GREY };
-  const links = blades.map(() => svg('line', { stroke: style.link, 'stroke-width': style.linkWidth, 'stroke-linecap': 'round' }, g));
-  const cranks = blades.map(() => svg('line', { stroke: BLUE, 'stroke-width': 3 * k, 'stroke-linecap': 'round' }, g));
-  const pins = blades.map(() => svg('circle', { r: 4.5 * k, fill: '#fff', stroke: BLUE, 'stroke-width': 1.6 }, g));
-
-  const hub = svg('g', {}, g);
-  for (const b of blades) {
-    const [x2, y2] = polar(centre, R_ARM, b);
-    svg('line', { x1: centre[0], y1: centre[1], x2, y2, stroke: style.arm, 'stroke-width': 6 * k, 'stroke-linecap': 'round' }, hub);
-    svg('circle', { cx: x2, cy: y2, r: 5 * k, fill: '#fff', stroke: style.arm, 'stroke-width': 1.6 }, hub);
-  }
+  // Hub hexagon
+  const hubR = 50 * k;
+  const hubPts = Array.from({ length: 6 }, (_, i) => polar(centre, hubR, armAngle(i)));
   svg('polygon', {
-    points: pts(Array.from({ length: 6 }, (_, i) => polar(centre, 30 * k, armAngle(i)))),
+    points: pts(hubPts),
     fill: FILL,
     stroke: BLUE,
     'stroke-width': 2,
-  }, hub);
-  svg('circle', { cx: centre[0], cy: centre[1], r: 7 * k, fill: '#fff', stroke: BLUE, 'stroke-width': 1.5 }, hub);
+    'stroke-linejoin': 'round',
+  }, g);
 
-  /** Pose everything for a blade tilt of theta degrees; returns the link midpoints. */
-  function pose(theta, shadowReach = 0) {
-    // Edge-on, a blade still shows as a slim trapezoid -- its thickness, drawn up so it reads.
-    const s = Math.max(Math.sin(theta * DEG), 0.12);
-    const mids = [];
-    blades.forEach((b, i) => {
-      const inner = polar(centre, R_IN, b);
-      const outer = polar(centre, R_OUT, b);
-      const face = [along(inner, W_IN * s, b), along(outer, W_OUT * s, b), along(outer, -W_OUT * s, b), along(inner, -W_IN * s, b)];
-      faces[i].setAttribute('points', pts(face));
-      shadows[i].setAttribute('points', pts(face.map(([x, y]) => [x + shadowReach * 1.2, y + shadowReach])));
-
-      const arm = polar(centre, R_ARM, b + theta * DEG);
-      const crank = along(inner, R_ARM * Math.sin(theta * DEG), b);
-      links[i].setAttribute('x1', arm[0]);
-      links[i].setAttribute('y1', arm[1]);
-      links[i].setAttribute('x2', crank[0]);
-      links[i].setAttribute('y2', crank[1]);
-      cranks[i].setAttribute('x1', inner[0]);
-      cranks[i].setAttribute('y1', inner[1]);
-      cranks[i].setAttribute('x2', crank[0]);
-      cranks[i].setAttribute('y2', crank[1]);
-      pins[i].setAttribute('cx', crank[0]);
-      pins[i].setAttribute('cy', crank[1]);
-      mids.push([(arm[0] + crank[0]) / 2, (arm[1] + crank[1]) / 2]);
-    });
-    hub.setAttribute('transform', `rotate(${-theta} ${centre[0]} ${centre[1]})`);
-    return mids;
+  // 6 structural arms
+  const armLen = 220 * k;
+  const arms = [];
+  for (let i = 0; i < 6; i++) {
+    const a = armAngle(i);
+    const [x1, y1] = polar(centre, hubR * 0.8, a);
+    const [x2, y2] = polar(centre, armLen, a);
+    const line = svg('line', {
+      x1, y1, x2, y2,
+      stroke: '#D9DEE4',
+      'stroke-width': 10 * k,
+      'stroke-linecap': 'round',
+    }, g);
+    arms.push({ line, angle: a, end: [x2, y2] });
   }
 
-  return { pose, blades };
-}
+  // Drive disc (rotatable group)
+  const discR = 38 * k;
+  const discGroup = svg('g', {}, g);
+  svg('circle', {
+    cx, cy, r: discR,
+    fill: '#E8EDF3',
+    stroke: BLUE,
+    'stroke-width': 2,
+  }, discGroup);
 
-/* ------------------------------------------------------------------ *
- * The linkage distributes the motion
- * ------------------------------------------------------------------ */
-
-function linkageDiagram(g) {
-  const O = [750, 290];
-
-  // The servo sits behind the hub, its horn fixed to the hub's centre.
-  svg('rect', {
-    x: O[0] - 34,
-    y: O[1] - 24,
-    width: 150,
-    height: 48,
-    rx: 6,
-    fill: 'none',
-    stroke: GREY,
-    'stroke-width': 1.6,
-    'stroke-dasharray': '6 5',
-  }, g);
-
-  const ring = drawLouvreRing(g, O, 1, { linkage: true });
-
-  // Motion spreading from the hub to every blade at once.
-  const spread = ring.blades.map((b) => {
-    const [x1, y1] = along(polar(O, 58, b), -22, b);
-    const [x2, y2] = along(polar(O, 96, b), -22, b);
-    return svg('line', {
-      x1, y1, x2, y2,
+  // 6 eccentric pins on the disc
+  const pinR = 26 * k; // eccentric radius (visual)
+  const pinDotR = 5 * k;
+  const pinDots = [];
+  const pinOrbits = [];
+  for (let i = 0; i < 6; i++) {
+    const a = armAngle(i);
+    // Orbit circle (faint)
+    const orbit = svg('circle', {
+      cx: cx + pinR * Math.cos(a),
+      cy: cy - pinR * Math.sin(a),
+      r: 0.1, // will be set visible in pin step
+      fill: 'none',
       stroke: ORANGE,
-      'stroke-width': 5,
-      'stroke-linecap': 'round',
-      'marker-end': 'url(#arrow-orange)',
+      'stroke-width': 1,
+      'stroke-dasharray': '4 3',
+      opacity: 0,
     }, g);
-  });
+    pinOrbits.push(orbit);
+    // Pin dot (on the disc group so it rotates)
+    const [px, py] = polar(centre, pinR, a);
+    const dot = svg('circle', {
+      cx: px, cy: py, r: pinDotR,
+      fill: ORANGE,
+      stroke: '#fff',
+      'stroke-width': 1.5,
+    }, discGroup);
+    pinDots.push(dot);
+  }
 
-  // Which way the hub turns.
-  const [tx0, ty0] = polar(O, 80, 200 * DEG);
-  const [tx1, ty1] = polar(O, 80, 232 * DEG);
-  const turn = svg('path', {
-    d: `M${tx0},${ty0} A80,80 0 0 0 ${tx1},${ty1}`,
-    fill: 'none',
-    stroke: ORANGE,
-    'stroke-width': 3,
-    'marker-end': 'url(#arrow-orange)',
-  }, g);
+  // Centre shaft dot
+  svg('circle', { cx, cy, r: 6 * k, fill: '#fff', stroke: BLUE, 'stroke-width': 1.5 }, discGroup);
 
-  // Labels, their leaders running out along the spine corridors between blades.
-  const leader = (from, to, text, anchor) => {
-    const line = svg('line', { x1: from[0], y1: from[1], x2: to[0], y2: to[1], stroke: BLUE, 'stroke-width': 1.2 }, g);
-    label(g, to[0] + (anchor === 'end' ? -6 : anchor === 'start' ? 6 : 0), to[1] + (anchor === 'middle' ? -8 : 5), text, {
-      'text-anchor': anchor,
-      'font-weight': 700,
-      fill: BLUE,
-    });
-    return line;
-  };
-  leader(polar(O, 34, 90 * DEG), polar(O, 262, 90 * DEG), 'hub', 'middle');
-  const linkLeader = leader([0, 0], polar(O, 280, 210 * DEG), 'link', 'end');
-  leader(polar(O, 250, 0), [O[0] + 292, O[1]], 'blade', 'start');
-  leader([O[0] + 50, O[1] + 24], polar(O, 285, 330 * DEG), 'servo behind hub', 'start');
-  const linkBlade = ring.blades.findIndex((b) => Math.abs(Math.cos(b) + 1) < 1e-6); // the one pointing left
+  // 6 sliding rods along the arms
+  const rodStart = hubR * 1.1;
+  const rodLen = 100 * k;
+  const rods = [];
+  for (let i = 0; i < 6; i++) {
+    const a = armAngle(i);
+    const [x1, y1] = polar(centre, rodStart, a);
+    const [x2, y2] = polar(centre, rodStart + rodLen, a);
+    // Guide channel (background)
+    svg('line', {
+      x1, y1, x2, y2,
+      stroke: '#EEF2F6',
+      'stroke-width': 8 * k,
+      'stroke-linecap': 'round',
+    }, g);
+    // Rod itself
+    const rod = svg('line', {
+      x1, y1, x2, y2,
+      stroke: BLUE,
+      'stroke-width': 4 * k,
+      'stroke-linecap': 'round',
+    }, g);
+    rods.push({ line: rod, angle: a, start: rodStart });
+  }
+
+  // Slot indicators at the inner end of each rod
+  const slots = [];
+  for (let i = 0; i < 6; i++) {
+    const a = armAngle(i);
+    const slotW = 14 * k;
+    const [sx, sy] = polar(centre, rodStart, a);
+    // Small perpendicular line = the transverse slot
+    const perp = a + Math.PI / 2;
+    const slot = svg('line', {
+      x1: sx + slotW * Math.cos(perp),
+      y1: sy - slotW * Math.sin(perp),
+      x2: sx - slotW * Math.cos(perp),
+      y2: sy + slotW * Math.sin(perp),
+      stroke: BLUE,
+      'stroke-width': 2.5 * k,
+      'stroke-linecap': 'round',
+      opacity: 0.6,
+    }, g);
+    slots.push(slot);
+  }
+
+  // 4 blades per arm region (between adjacent arms)
+  const bladeGroups = [];
+  for (let i = 0; i < 6; i++) {
+    const regionGroup = svg('g', {}, g);
+    const a1 = armAngle(i);
+    const a2 = armAngle((i + 1) % 6);
+    const regionAngle = (a1 + a2) / 2; // bisector of the region
+    // Adjust for wrapping
+    const midA = a1 + (((a2 - a1) % (2 * Math.PI) + 3 * Math.PI) % (2 * Math.PI) - Math.PI) / 2;
+
+    const blades = [];
+    for (let b = 0; b < 4; b++) {
+      const frac = (b + 0.5) / 4;
+      const bladeR = (rodStart + 20 * k) + frac * (rodLen - 10 * k);
+      // Blade pivot on the arm
+      const pivotA = a1;
+      const [pvx, pvy] = polar(centre, bladeR, pivotA);
+
+      // Crank arm (rotates with blade)
+      const crankLen = 24 * k;
+      const crank = svg('line', {
+        x1: pvx, y1: pvy,
+        x2: pvx, y2: pvy,
+        stroke: ORANGE,
+        'stroke-width': 3 * k,
+        'stroke-linecap': 'round',
+      }, regionGroup);
+
+      // Blade body (a short arc or line representing the blade)
+      const bladeLen = 34 * k;
+      const blade = svg('line', {
+        x1: pvx, y1: pvy,
+        x2: pvx, y2: pvy,
+        stroke: BLUE,
+        'stroke-width': 6 * k,
+        'stroke-linecap': 'round',
+        opacity: 0.8,
+      }, regionGroup);
+
+      // Pivot dot
+      svg('circle', {
+        cx: pvx, cy: pvy,
+        r: 3 * k,
+        fill: '#fff',
+        stroke: BLUE,
+        'stroke-width': 1.2,
+      }, regionGroup);
+
+      blades.push({
+        crank, blade,
+        pivot: [pvx, pvy],
+        crankLen,
+        bladeLen,
+        armAngle: a1,
+        regionMid: midA,
+      });
+    }
+    bladeGroups.push({ group: regionGroup, blades });
+  }
+
+  /** Pose the mechanism at a given disc rotation angle (degrees, 0–45). */
+  function pose(theta) {
+    const rad = theta * DEG;
+    discGroup.setAttribute('transform', `rotate(${-theta} ${cx} ${cy})`);
+
+    // Move rods outward proportionally
+    const maxSlide = 46 * k / (220 * k) * rodLen; // ~46mm proportional
+    const slide = maxSlide * Math.sin(rad) / Math.sin(45 * DEG);
+
+    for (let i = 0; i < 6; i++) {
+      const a = rods[i].angle;
+      const s = rods[i].start;
+      const [x1, y1] = polar(centre, s + slide, a);
+      const [x2, y2] = polar(centre, s + rodLen + slide, a);
+      rods[i].line.setAttribute('x1', x1);
+      rods[i].line.setAttribute('y1', y1);
+      rods[i].line.setAttribute('x2', x2);
+      rods[i].line.setAttribute('y2', y2);
+
+      // Move slots with the rod
+      const slotW = 14 * k;
+      const [sx, sy] = polar(centre, s + slide, a);
+      const perp = a + Math.PI / 2;
+      slots[i].setAttribute('x1', sx + slotW * Math.cos(perp));
+      slots[i].setAttribute('y1', sy - slotW * Math.sin(perp));
+      slots[i].setAttribute('x2', sx - slotW * Math.cos(perp));
+      slots[i].setAttribute('y2', sy + slotW * Math.sin(perp));
+    }
+
+    // Rotate blades
+    for (let i = 0; i < 6; i++) {
+      const bg = bladeGroups[i];
+      for (const b of bg.blades) {
+        const [pvx, pvy] = b.pivot;
+        // Crank swings from the arm direction toward the region
+        const crankAngle = b.armAngle + (b.regionMid - b.armAngle > 0 ? 1 : -1) * theta * DEG * 0.5;
+        const crankDir = b.regionMid - b.armAngle;
+        const swing = crankDir > 0 ? theta * DEG : -theta * DEG;
+        const ca = b.armAngle + Math.PI / 2 + swing;
+        const [cx2, cy2] = [pvx + b.crankLen * Math.cos(ca), pvy - b.crankLen * Math.sin(ca)];
+        b.crank.setAttribute('x2', cx2);
+        b.crank.setAttribute('y2', cy2);
+
+        // Blade rotates about its pivot
+        const bladeA = b.armAngle + swing * 0.9;
+        const [bx2, by2] = [pvx + b.bladeLen * Math.cos(bladeA), pvy - b.bladeLen * Math.sin(bladeA)];
+        b.blade.setAttribute('x1', pvx - b.bladeLen * 0.3 * Math.cos(bladeA));
+        b.blade.setAttribute('y1', pvy + b.bladeLen * 0.3 * Math.sin(bladeA));
+        b.blade.setAttribute('x2', bx2);
+        b.blade.setAttribute('y2', by2);
+      }
+    }
+  }
+
+  // Initial pose
+  pose(0);
 
   return {
-    viewBox: [440, 10, 700, 540],
-    rest: 2,
+    discGroup,
+    pinDots,
+    pinOrbits,
+    arms,
+    rods,
+    slots,
+    bladeGroups,
+    pose,
+    centre,
+    hubR,
+    pinR,
+    discR,
+    armLen,
+    rodStart,
+    rodLen,
+    scale: k,
+  };
+}
+
+/* ================================================================== *
+ * Controller decides the blade angle (step 2)
+ * ================================================================== */
+
+function controllerDiagram(g) {
+  // Controller box
+  svg('rect', { x: 40, y: 40, width: 200, height: 60, rx: 10, fill: FILL, stroke: BLUE, 'stroke-width': 2 }, g);
+  label(g, 140, 78, 'Controller', { 'text-anchor': 'middle', 'font-weight': 700, fill: BLUE, 'font-size': 16 });
+
+  // Two sensor inputs
+  const sensorLabels = ['Sensor 1 (high)', 'Sensor 2 (low)'];
+  const flows = [];
+  for (let i = 0; i < 2; i++) {
+    const y = 55 + i * 30;
+    svg('line', { x1: -60, y1: y, x2: 40, y2: y, stroke: '#E6EBF0', 'stroke-width': 4 }, g);
+    const flow = svg('line', {
+      x1: -60, y1: y, x2: 40, y2: y,
+      stroke: ORANGE, 'stroke-width': 2.5,
+      'stroke-dasharray': '9 7', opacity: 0,
+    }, g);
+    label(g, -65, y + 5, sensorLabels[i], { 'text-anchor': 'end', 'font-size': 11, fill: GREY });
+    flows.push(flow);
+  }
+
+  // Arrow down from controller
+  svg('line', { x1: 140, y1: 100, x2: 140, y2: 140, stroke: BLUE, 'stroke-width': 2 }, g);
+  svg('path', { d: 'M134,135 L140,148 L146,135', fill: BLUE }, g);
+
+  // Angle ranges table
+  const tableY = 155;
+  const tableW = 380;
+  const tableH = 180;
+  svg('rect', { x: -10, y: tableY, width: tableW, height: tableH, rx: 8, fill: '#fff', stroke: '#D9DEE4', 'stroke-width': 1.5 }, g);
+
+  // Header
+  svg('rect', { x: -10, y: tableY, width: tableW, height: 32, rx: 8, fill: FILL }, g);
+  svg('rect', { x: -10, y: tableY + 24, width: tableW, height: 8, fill: FILL }, g);
+  label(g, 90, tableY + 22, 'Sunlight level', { 'font-weight': 700, 'font-size': 13, fill: BLUE });
+  label(g, 290, tableY + 22, 'Target angle', { 'font-weight': 700, 'font-size': 13, fill: BLUE });
+
+  // Rows
+  const rows = [
+    ['Low sunlight', '0°–10°'],
+    ['Moderate sunlight', '15°–30°'],
+    ['Strong direct sunlight', '35°–45°'],
+    ['High-wind alarm', '0° (storm-safe)'],
+  ];
+  const rowEls = rows.map((row, i) => {
+    const ry = tableY + 38 + i * 36;
+    if (i < 3) svg('line', { x1: 0, y1: ry - 4, x2: tableW - 20, y2: ry - 4, stroke: '#EEF2F6', 'stroke-width': 1 }, g);
+    const left = label(g, 20, ry + 14, row[0], { 'font-size': 14, fill: INK });
+    const right = label(g, 290, ry + 14, row[1], { 'font-size': 14, 'font-weight': 700, fill: ORANGE });
+    const highlight = svg('rect', {
+      x: -6, y: ry - 2, width: tableW - 8, height: 32, rx: 6,
+      fill: ORANGE, 'fill-opacity': 0, stroke: ORANGE, 'stroke-width': 0,
+    }, g);
+    return { left, right, highlight, y: ry };
+  });
+
+  // Threshold note
+  const noteY = tableY + tableH + 16;
+  label(g, -6, noteY, 'The controller only moves the blades when the difference', { 'font-size': 12, fill: GREY });
+  label(g, -6, noteY + 16, 'between current and required angle exceeds a threshold.', { 'font-size': 12, fill: GREY });
+
+  return {
+    viewBox: [-120, 10, 500, 380],
+    rest: 3,
     tick(t) {
-      const [theta, moving] = tiltCycle(t, LINKAGE_CYCLE);
-      const mids = ring.pose(theta);
-      linkLeader.setAttribute('x1', mids[linkBlade][0]);
-      linkLeader.setAttribute('y1', mids[linkBlade][1]);
-      const pulse = moving ? 0.55 + 0.45 * Math.sin(t * 10) : 0.35;
-      for (const arrow of spread) arrow.setAttribute('opacity', pulse);
-      turn.setAttribute('opacity', moving ? 1 : 0.35);
+      flows.forEach((flow, i) => {
+        flow.setAttribute('opacity', ease((t - 0.2 - i * 0.15) / 0.35));
+        flow.setAttribute('stroke-dashoffset', -t * 40);
+      });
+      // Highlight the "strong direct sunlight" row after a beat
+      const highlight = ease((t - 1.2) / 0.5);
+      rowEls[2].highlight.setAttribute('fill-opacity', highlight * 0.12);
+      rowEls[2].highlight.setAttribute('stroke-width', highlight * 2);
     },
   };
 }
 
-/* ------------------------------------------------------------------ *
- * The louvres tilt
- * ------------------------------------------------------------------ */
+/* ================================================================== *
+ * Position command interface (step 3)
+ * ================================================================== */
 
-function louvresDiagram(g) {
-  // Face on: the six blades, their shadow on the facade growing as they close.
-  const ring = drawLouvreRing(g, [400, 280], 0.9, { linkage: false });
-  label(g, 400, 548, 'front view', { 'text-anchor': 'middle', 'font-weight': 700, fill: GREY });
+function commandDiagram(g) {
+  // Controller box
+  const ctrlX = 40;
+  const ctrlY = 80;
+  svg('rect', { x: ctrlX, y: ctrlY, width: 180, height: 70, rx: 10, fill: FILL, stroke: BLUE, 'stroke-width': 2 }, g);
+  label(g, ctrlX + 90, ctrlY + 30, 'Arduino-based', { 'text-anchor': 'middle', 'font-weight': 700, fill: BLUE, 'font-size': 14 });
+  label(g, ctrlX + 90, ctrlY + 50, 'controller', { 'text-anchor': 'middle', 'font-weight': 700, fill: BLUE, 'font-size': 14 });
 
-  // In section: one blade on its pivot, the facade behind, the sun's rays.
-  const P = [1090, 230];
-  const FACADE = 1320;
-  const HALF_LEN = 130;
-  const d = [Math.cos(30 * DEG), Math.sin(30 * DEG)]; // the sun's rays, down and in
-  svg('rect', { x: FACADE, y: 60, width: 12, height: 460, fill: FILL, stroke: BLUE, 'stroke-width': 1.5 }, g);
-  label(g, FACADE + 6, 50, 'façade', { 'text-anchor': 'middle', 'font-weight': 700, fill: BLUE });
-  label(g, 1090, 548, 'section', { 'text-anchor': 'middle', 'font-weight': 700, fill: GREY });
+  // Actuator box
+  const actX = 420;
+  const actY = 80;
+  svg('rect', { x: actX, y: actY, width: 180, height: 70, rx: 10, fill: '#E8EDF3', stroke: BLUE, 'stroke-width': 2 }, g);
+  label(g, actX + 90, actY + 30, 'DCL-10', { 'text-anchor': 'middle', 'font-weight': 800, fill: BLUE, 'font-size': 18 });
+  label(g, actX + 90, actY + 50, 'actuator', { 'text-anchor': 'middle', 'font-weight': 600, fill: BLUE, 'font-size': 14 });
 
-  const sunAt = [800, 64];
-  for (let k = 0; k < 8; k++) {
-    const [x1, y1] = polar(sunAt, 24, k * 45 * DEG);
-    const [x2, y2] = polar(sunAt, 32, k * 45 * DEG);
-    svg('line', { x1, y1, x2, y2, stroke: ORANGE, 'stroke-width': 3, 'stroke-linecap': 'round' }, g);
-  }
-  svg('circle', { cx: sunAt[0], cy: sunAt[1], r: 18, fill: ORANGE }, g);
-  label(g, sunAt[0] + 40, sunAt[1] - 18, 'sun', { 'font-weight': 700, fill: BLUE });
-
-  // Rays, spaced down the facade; each runs back up-sun to where it enters the view.
-  const rays = [90, 150, 210, 270, 330, 390, 450, 510].map((yf) => {
-    const back = Math.min((FACADE - 770) / d[0], (yf - 50) / d[1]);
-    const start = [FACADE - d[0] * back, yf - d[1] * back];
-    const line = svg('line', {
-      x1: start[0],
-      y1: start[1],
-      stroke: ORANGE,
-      'stroke-width': 2.5,
-      'stroke-dasharray': '10 7',
-      'stroke-linecap': 'round',
-      'marker-end': 'url(#arrow-orange)',
-    }, g);
-    return { start, line };
+  // Command line (controller → actuator)
+  const cmdY = ctrlY + 25;
+  svg('line', { x1: ctrlX + 180, y1: cmdY, x2: actX, y2: cmdY, stroke: '#E6EBF0', 'stroke-width': 4 }, g);
+  const cmdFlow = svg('line', {
+    x1: ctrlX + 180, y1: cmdY, x2: actX, y2: cmdY,
+    stroke: ORANGE, 'stroke-width': 2.5,
+    'stroke-dasharray': '9 7',
+    'marker-end': 'url(#arrow-orange)',
+    opacity: 0,
+  }, g);
+  label(g, (ctrlX + 180 + actX) / 2, cmdY - 14, 'Position command', {
+    'text-anchor': 'middle', 'font-weight': 700, 'font-size': 13, fill: ORANGE,
   });
 
-  const shadowVolume = svg('polygon', { fill: INK, 'fill-opacity': 0.07 }, g);
-  const shadowBand = svg('rect', { x: FACADE, width: 12, fill: INK, 'fill-opacity': 0.45 }, g);
-  const shadowText = label(g, FACADE + 22, 0, 'shadow', { 'font-weight': 700, fill: INK });
+  // Signal options note
+  label(g, (ctrlX + 180 + actX) / 2, cmdY + 24, 'Signal: 0–10 V, 4–20 mA, or RS485/Modbus', {
+    'text-anchor': 'middle', 'font-size': 11, fill: GREY,
+  });
 
-  // Angle references: 0 (flat, edge-on to the facade) and the 45 limit.
-  svg('line', { x1: P[0], y1: P[1], x2: P[0] - 200, y2: P[1], stroke: GREY, 'stroke-width': 1.5, 'stroke-dasharray': '6 5' }, g);
-  label(g, P[0] - 208, P[1] + 5, '0°', { 'text-anchor': 'end', 'font-weight': 700, fill: GREY });
-  const lim = [P[0] - 170 * Math.cos(45 * DEG), P[1] + 170 * Math.sin(45 * DEG)];
-  svg('line', { x1: P[0], y1: P[1], x2: lim[0], y2: lim[1], stroke: GREY, 'stroke-width': 1.5, 'stroke-dasharray': '6 5' }, g);
-  label(g, lim[0] - 6, lim[1] + 16, '45°', { 'text-anchor': 'end', 'font-weight': 700, fill: GREY });
+  // Feedback line (actuator → controller, below)
+  const fbY = ctrlY + 55;
+  svg('line', { x1: actX, y1: fbY, x2: ctrlX + 180, y2: fbY, stroke: '#E6EBF0', 'stroke-width': 4 }, g);
+  const fbFlow = svg('line', {
+    x1: actX, y1: fbY, x2: ctrlX + 180, y2: fbY,
+    stroke: BLUE, 'stroke-width': 2,
+    'stroke-dasharray': '6 5',
+    'marker-end': 'url(#arrow-blue)',
+    opacity: 0,
+  }, g);
+  label(g, (ctrlX + 180 + actX) / 2, fbY + 20, 'Position feedback', {
+    'text-anchor': 'middle', 'font-weight': 600, 'font-size': 12, fill: BLUE,
+  });
 
-  // Which way it turns as it closes.
-  const [rx0, ry0] = [P[0] - 150, P[1]];
-  const [rx1, ry1] = [P[0] - 150 * Math.cos(45 * DEG), P[1] + 150 * Math.sin(45 * DEG)];
-  const turn = svg('path', {
-    d: `M${rx0},${ry0} A150,150 0 0 0 ${rx1},${ry1}`,
-    fill: 'none',
-    stroke: ORANGE,
-    'stroke-width': 3,
+  // Spec card
+  const specY = 200;
+  svg('rect', { x: 100, y: specY, width: 440, height: 100, rx: 10, fill: '#fff', stroke: '#D9DEE4', 'stroke-width': 1.5 }, g);
+  label(g, 120, specY + 28, 'DCL-10 specifications', { 'font-weight': 700, 'font-size': 14, fill: BLUE });
+
+  const specs = [
+    '24 V  ·  adjustable 0°–90°  ·  100 Nm  ·  ≈30 s per 90°  ·  IP67',
+    'This design uses 45° of the 0°–90° range.',
+  ];
+  label(g, 120, specY + 54, specs[0], { 'font-size': 13, fill: INK });
+  label(g, 120, specY + 78, specs[1], { 'font-size': 12, 'font-style': 'italic', fill: GREY });
+
+  return {
+    viewBox: [10, 40, 620, 280],
+    rest: 2,
+    tick(t) {
+      cmdFlow.setAttribute('opacity', ease((t - 0.3) / 0.4));
+      cmdFlow.setAttribute('stroke-dashoffset', -t * 40);
+      fbFlow.setAttribute('opacity', ease((t - 1.2) / 0.4));
+      fbFlow.setAttribute('stroke-dashoffset', t * 30);
+    },
+  };
+}
+
+/* ================================================================== *
+ * Drive disc (step 4)
+ * ================================================================== */
+
+function discDiagram(g) {
+  const mech = drawMechanism(g, [300, 280], 1);
+  // Side-view inset: DCL-10 inside hub, shaft perpendicular, disc on shaft
+  const inset = svg('g', {}, g);
+  svg('rect', { x: 530, y: 40, width: 200, height: 200, rx: 10, fill: '#fff', stroke: '#D9DEE4', 'stroke-width': 1.5 }, inset);
+  label(inset, 630, 62, 'Side view', { 'text-anchor': 'middle', 'font-weight': 700, 'font-size': 13, fill: BLUE });
+
+  // Hub cross-section
+  svg('rect', { x: 570, y: 80, width: 120, height: 50, rx: 4, fill: FILL, stroke: BLUE, 'stroke-width': 1.5 }, inset);
+  label(inset, 630, 110, 'Hub', { 'text-anchor': 'middle', 'font-size': 11, fill: GREY });
+
+  // DCL-10 inside hub
+  svg('rect', { x: 595, y: 90, width: 70, height: 30, rx: 3, fill: '#E8EDF3', stroke: BLUE, 'stroke-width': 1.5 }, inset);
+  label(inset, 630, 110, 'DCL-10', { 'text-anchor': 'middle', 'font-size': 10, 'font-weight': 700, fill: BLUE });
+
+  // Shaft coming out perpendicular
+  svg('line', { x1: 630, y1: 130, x2: 630, y2: 185, stroke: BLUE, 'stroke-width': 4, 'stroke-linecap': 'round' }, inset);
+  label(inset, 648, 160, 'Shaft', { 'font-size': 11, fill: INK });
+
+  // Disc at the end of the shaft
+  svg('line', { x1: 600, y1: 185, x2: 660, y2: 185, stroke: BLUE, 'stroke-width': 6, 'stroke-linecap': 'round' }, inset);
+  label(inset, 630, 210, 'Drive disc', { 'text-anchor': 'middle', 'font-size': 11, 'font-weight': 700, fill: ORANGE });
+  // Façade line
+  svg('line', { x1: 560, y1: 220, x2: 700, y2: 220, stroke: GREY, 'stroke-width': 1, 'stroke-dasharray': '5 4' }, inset);
+  label(inset, 630, 236, 'Façade plane', { 'text-anchor': 'middle', 'font-size': 10, fill: GREY });
+
+  // Labels for the main view
+  label(g, 300, 510, 'Face-on view', { 'text-anchor': 'middle', 'font-weight': 700, fill: GREY });
+
+  // Angle arc
+  const arcR = 60;
+  const arc45 = svg('path', {
+    d: '', fill: 'none', stroke: ORANGE, 'stroke-width': 2.5,
     'marker-end': 'url(#arrow-orange)',
   }, g);
 
-  const wedge = svg('path', { fill: ORANGE, 'fill-opacity': 0.15, stroke: ORANGE, 'stroke-width': 2 }, g);
-  const blade = svg('polygon', { fill: FILL, stroke: BLUE, 'stroke-width': 2, 'stroke-linejoin': 'round' }, g);
-  svg('circle', { cx: P[0], cy: P[1], r: 6, fill: '#fff', stroke: BLUE, 'stroke-width': 2 }, g);
-  const readout = label(g, 0, 0, '0°', { 'text-anchor': 'end', 'font-size': 22, 'font-weight': 800, fill: ORANGE });
+  const angleLabel = label(g, 0, 0, '0°', { 'font-weight': 800, 'font-size': 18, fill: ORANGE });
+
+  // Duration label
+  const duration = label(g, 300, 480, '', { 'text-anchor': 'middle', 'font-size': 14, fill: INK, opacity: 0 });
+
+  const CYCLE = { to: 45, up: 2.5, hold: 1.5, down: 2.0, rest: 1.0 };
 
   return {
-    viewBox: [130, 20, 1350, 540],
+    viewBox: [30, 30, 730, 500],
     rest: 2,
     tick(t) {
-      const [theta, moving] = tiltCycle(t, LOUVRE_CYCLE);
-      const s = Math.sin(theta * DEG);
-      ring.pose(theta, 6 + 14 * s);
+      const [theta] = tiltCycle(t, CYCLE);
+      mech.pose(theta);
 
-      // The section blade: its far (sunward) end dips as it closes toward the sun.
-      const b = [Math.cos(theta * DEG), -Math.sin(theta * DEG)];
-      const n = [-b[1], b[0]];
-      const E1 = [P[0] - b[0] * HALF_LEN, P[1] - b[1] * HALF_LEN];
-      const E2 = [P[0] + b[0] * HALF_LEN, P[1] + b[1] * HALF_LEN];
-      blade.setAttribute('points', pts([
-        [E1[0] + n[0] * 6, E1[1] + n[1] * 6],
-        [E2[0] + n[0] * 6, E2[1] + n[1] * 6],
-        [E2[0] - n[0] * 6, E2[1] - n[1] * 6],
-        [E1[0] - n[0] * 6, E1[1] - n[1] * 6],
-      ]));
-
-      // Its shadow on the facade: each end cast along the rays.
-      const onFacade = (E) => E[1] + ((FACADE - E[0]) * d[1]) / d[0];
-      const y1 = onFacade(E1);
-      const y2 = onFacade(E2);
-      const top = Math.min(y1, y2);
-      const bottom = Math.max(y1, y2);
-      shadowBand.setAttribute('y', top);
-      shadowBand.setAttribute('height', bottom - top);
-      shadowVolume.setAttribute('points', pts([E1, E2, [FACADE, y2], [FACADE, y1]]));
-      shadowText.setAttribute('y', (top + bottom) / 2 + 5);
-
-      // Rays stop where they meet the blade; the rest reach the facade.
-      for (const ray of rays) {
-        const [sx, sy] = ray.start;
-        let end = [FACADE, sy + ((FACADE - sx) * d[1]) / d[0]];
-        // start + d * dist = E1 + (E2 - E1) * u, solved by cross products.
-        const ex = E2[0] - E1[0];
-        const ey = E2[1] - E1[1];
-        const wx = E1[0] - sx;
-        const wy = E1[1] - sy;
-        const den = d[0] * ey - d[1] * ex;
-        if (Math.abs(den) > 1e-9) {
-          const dist = (wx * ey - wy * ex) / den;
-          const u = (wx * d[1] - wy * d[0]) / den;
-          if (u >= 0 && u <= 1 && dist > 0) end = [sx + d[0] * dist, sy + d[1] * dist];
-        }
-        ray.line.setAttribute('x2', end[0]);
-        ray.line.setAttribute('y2', end[1]);
-        ray.line.setAttribute('stroke-dashoffset', -t * 30);
+      // Arc showing current rotation
+      const [cx, cy] = mech.centre;
+      if (theta > 0.5) {
+        const endA = -theta * DEG;
+        const ex = cx + arcR * Math.cos(endA);
+        const ey = cy - arcR * Math.sin(endA);
+        arc45.setAttribute('d',
+          `M${cx},${cy - arcR} A${arcR},${arcR} 0 0 1 ${ex.toFixed(1)},${ey.toFixed(1)}`
+        );
+      } else {
+        arc45.setAttribute('d', '');
       }
 
-      // The angle, and its arc from flat.
-      const ar = 90;
-      const tip = [P[0] - ar * Math.cos(theta * DEG), P[1] + ar * Math.sin(theta * DEG)];
-      wedge.setAttribute('d', `M${P[0]},${P[1]} L${P[0] - ar},${P[1]} A${ar},${ar} 0 0 0 ${tip[0]},${tip[1]} Z`);
-      // The number sits outside the turning arrow, clear of it and the blade at any angle.
-      const mid = (theta / 2) * DEG;
-      readout.setAttribute('x', P[0] - 185 * Math.cos(mid) - 4);
-      readout.setAttribute('y', P[1] + 185 * Math.sin(mid) + 28);
-      readout.textContent = `${Math.round(theta)}°`;
-      turn.setAttribute('opacity', moving ? 1 : 0.4);
+      angleLabel.textContent = `${Math.round(theta)}°`;
+      angleLabel.setAttribute('x', cx + 75);
+      angleLabel.setAttribute('y', cy - 50);
+
+      duration.textContent = theta > 1 ? '≈15 s for full 0°→45°' : '';
+      duration.setAttribute('opacity', theta > 1 ? 1 : 0);
     },
   };
 }
 
-/* ------------------------------------------------------------------ *
+/* ================================================================== *
+ * Eccentric pins (step 5)
+ * ================================================================== */
+
+function pinsDiagram(g) {
+  const mech = drawMechanism(g, [300, 280], 1);
+
+  // Show orbit circles
+  for (const orbit of mech.pinOrbits) {
+    orbit.setAttribute('r', mech.pinR);
+    orbit.setAttribute('opacity', 0.5);
+  }
+
+  // Labels
+  label(g, 300, 510, 'Each pin follows a circular path around the shaft', {
+    'text-anchor': 'middle', 'font-size': 13, fill: INK,
+  });
+  label(g, 300, 530, 'Pins engage transverse slots — not rigidly connected to the rods', {
+    'text-anchor': 'middle', 'font-size': 12, fill: GREY,
+  });
+
+  const CYCLE = { to: 45, up: 2.5, hold: 1.0, down: 2.0, rest: 0.8 };
+
+  return {
+    viewBox: [30, 30, 560, 520],
+    rest: 2,
+    tick(t) {
+      const [theta] = tiltCycle(t, CYCLE);
+      mech.pose(theta);
+    },
+  };
+}
+
+/* ================================================================== *
+ * Slotted rod detail (step 6)
+ * ================================================================== */
+
+function rodDiagram(g) {
+  // Zoomed view of ONE rod with the pin-in-slot detail
+  const cx = 300;
+  const cy = 250;
+
+  // Guide channel (the arm)
+  svg('rect', { x: 80, y: cy - 18, width: 500, height: 36, rx: 6, fill: '#EEF2F6', stroke: '#D9DEE4', 'stroke-width': 1.5 }, g);
+  label(g, 330, cy - 30, 'Guide channel along structural arm', { 'text-anchor': 'middle', 'font-size': 12, fill: GREY });
+
+  // Rod (slides left-right)
+  const rodW = 340;
+  const rod = svg('rect', { x: 100, y: cy - 10, width: rodW, height: 20, rx: 4, fill: FILL, stroke: BLUE, 'stroke-width': 2 }, g);
+
+  // Transverse slot at the inner end of the rod
+  const slotX = 120;
+  const slotH = 50;
+  const slotGroup = svg('g', {}, g);
+  svg('rect', { x: slotX - 5, y: cy - slotH / 2, width: 10, height: slotH, rx: 3, fill: '#fff', stroke: BLUE, 'stroke-width': 1.5 }, slotGroup);
+  label(g, slotX, cy - slotH / 2 - 10, 'Transverse slot', { 'text-anchor': 'middle', 'font-weight': 700, 'font-size': 12, fill: BLUE });
+
+  // Pin (moves in a circle, but shown as sliding across the slot)
+  const pinCX = 90; // pivot centre (actuator axis, off-screen left conceptually)
+  const pinEccentric = 50; // visual eccentric radius
+  const pin = svg('circle', { cx: slotX, cy: cy, r: 8, fill: ORANGE, stroke: '#fff', 'stroke-width': 2 }, g);
+
+  // Arrow labels for radial and sideways components
+  const radialArrow = svg('line', {
+    x1: 0, y1: 0, x2: 0, y2: 0,
+    stroke: ORANGE, 'stroke-width': 3,
+    'marker-end': 'url(#arrow-orange)',
+    opacity: 0,
+  }, g);
+  const radialLabel = label(g, 0, 0, 'Radial → pushes rod', { 'font-weight': 700, 'font-size': 12, fill: ORANGE, opacity: 0 });
+
+  const sideArrow = svg('line', {
+    x1: 0, y1: 0, x2: 0, y2: 0,
+    stroke: BLUE, 'stroke-width': 2.5,
+    'stroke-dasharray': '6 4',
+    opacity: 0,
+  }, g);
+  const sideLabel = label(g, 0, 0, '↕ Sideways → absorbed by slot', { 'font-weight': 600, 'font-size': 12, fill: BLUE, opacity: 0 });
+
+  // Summary at bottom
+  label(g, cx, 420, 'Disc rotation → pin circular movement → guided rod linear movement', {
+    'text-anchor': 'middle', 'font-size': 13, 'font-weight': 700, fill: INK,
+  });
+  label(g, cx, 444, 'All six rods move together by the same distance', {
+    'text-anchor': 'middle', 'font-size': 12, fill: GREY,
+  });
+
+  const CYCLE = { to: 45, up: 3.0, hold: 1.0, down: 2.5, rest: 1.0 };
+
+  return {
+    viewBox: [20, 80, 600, 400],
+    rest: 2,
+    tick(t) {
+      const [theta, moving] = tiltCycle(t, CYCLE);
+      const rad = theta * DEG;
+
+      // Pin position: circular path, but we show the radial displacement
+      const slide = pinEccentric * Math.sin(rad) / Math.sin(45 * DEG) * (45 * DEG > 0.01 ? 1 : 0);
+      const sideOffset = pinEccentric * (1 - Math.cos(rad)) * 0.4;
+
+      // Move the rod
+      rod.setAttribute('x', 100 + slide * 0.8);
+      slotGroup.setAttribute('transform', `translate(${slide * 0.8} 0)`);
+
+      // Pin slides across the slot
+      pin.setAttribute('cx', slotX + slide * 0.8);
+      pin.setAttribute('cy', cy + sideOffset - sideOffset * 0.5);
+
+      // Component arrows
+      const showArrows = ease((t - 0.8) / 0.5);
+      radialArrow.setAttribute('opacity', showArrows);
+      radialArrow.setAttribute('x1', slotX + slide * 0.8 + 20);
+      radialArrow.setAttribute('y1', cy);
+      radialArrow.setAttribute('x2', slotX + slide * 0.8 + 65);
+      radialArrow.setAttribute('y2', cy);
+      radialLabel.setAttribute('opacity', showArrows);
+      radialLabel.setAttribute('x', slotX + slide * 0.8 + 70);
+      radialLabel.setAttribute('y', cy + 5);
+
+      sideArrow.setAttribute('opacity', showArrows * 0.8);
+      sideArrow.setAttribute('x1', slotX + slide * 0.8);
+      sideArrow.setAttribute('y1', cy + 14);
+      sideArrow.setAttribute('x2', slotX + slide * 0.8);
+      sideArrow.setAttribute('y2', cy + 50);
+      sideLabel.setAttribute('opacity', showArrows);
+      sideLabel.setAttribute('x', slotX + slide * 0.8 + 14);
+      sideLabel.setAttribute('y', cy + 68);
+    },
+  };
+}
+
+/* ================================================================== *
+ * Slider calculation (step 7)
+ * ================================================================== */
+
+function calcDiagram(g) {
+  const cx = 300;
+  const cy = 200;
+
+  // Draw a crank arm geometry diagram
+  // Pivot point
+  svg('circle', { cx, cy, r: 6, fill: '#fff', stroke: BLUE, 'stroke-width': 2 }, g);
+  label(g, cx + 14, cy + 5, 'Blade pivot', { 'font-size': 12, 'font-weight': 600, fill: INK });
+
+  // Crank arm (rotates)
+  const crankLen = 120; // visual
+  const crank = svg('line', {
+    x1: cx, y1: cy,
+    x2: cx + crankLen, y2: cy,
+    stroke: ORANGE, 'stroke-width': 4, 'stroke-linecap': 'round',
+  }, g);
+  const crankEnd = svg('circle', { cx: cx + crankLen, cy, r: 5, fill: ORANGE, stroke: '#fff', 'stroke-width': 1.5 }, g);
+
+  // Reference line (0° position)
+  svg('line', {
+    x1: cx, y1: cy, x2: cx + crankLen + 40, y2: cy,
+    stroke: GREY, 'stroke-width': 1.5, 'stroke-dasharray': '6 5',
+  }, g);
+  label(g, cx + crankLen + 48, cy + 5, '0°', { 'font-size': 13, 'font-weight': 700, fill: GREY });
+
+  // Chord line s (distance moved by the crank tip)
+  const chordLine = svg('line', {
+    x1: 0, y1: 0, x2: 0, y2: 0,
+    stroke: ORANGE, 'stroke-width': 2.5, 'stroke-dasharray': '8 4',
+  }, g);
+
+  // Angle arc
+  const arcR = 50;
+  const angleArc = svg('path', { d: '', fill: ORANGE, 'fill-opacity': 0.12, stroke: ORANGE, 'stroke-width': 2 }, g);
+  const angleText = label(g, 0, 0, '', { 'font-weight': 800, 'font-size': 20, fill: ORANGE });
+
+  // Live formula display
+  const formulaGroup = svg('g', {}, g);
+  const formulaTitle = label(formulaGroup, 60, 380, 'Crank formula:', { 'font-weight': 700, 'font-size': 14, fill: BLUE });
+  const formula = label(formulaGroup, 60, 405, 's = 2a·sin(θ/2)', { 'font-family': MONO, 'font-size': 16, fill: INK });
+  const aLabel = label(formulaGroup, 60, 430, 'a = 60 mm (crank arm)', { 'font-size': 13, fill: INK });
+  const sValue = label(formulaGroup, 60, 455, 's = 0 mm', { 'font-weight': 800, 'font-size': 18, fill: ORANGE });
+
+  // Pin check formula (shown at θ = 45°)
+  const pinCheck = svg('g', { opacity: 0 }, g);
+  svg('rect', { x: 310, y: 360, width: 290, height: 120, rx: 10, fill: '#fff', stroke: '#D9DEE4', 'stroke-width': 1.5 }, pinCheck);
+  label(pinCheck, 325, 388, 'Pin radius check:', { 'font-weight': 700, 'font-size': 13, fill: BLUE });
+  label(pinCheck, 325, 410, 's = r·sin 45° = 65 × 0.707', { 'font-family': MONO, 'font-size': 13, fill: INK });
+  label(pinCheck, 325, 430, '= 45.96 mm ✓', { 'font-family': MONO, 'font-size': 13, 'font-weight': 700, fill: ORANGE });
+
+  // Design values (shown at θ = 45°)
+  const designVals = svg('g', { opacity: 0 }, g);
+  label(designVals, 325, 460, 'Design values:', { 'font-weight': 700, 'font-size': 12, fill: BLUE });
+  const dvs = [
+    'Pin radius ≈ 65 mm',
+    'Slider stroke ≈ 46 mm',
+    'Crank arm ≈ 60 mm',
+    'Blade rotation 0°–45°',
+  ];
+  dvs.forEach((dv, i) => label(designVals, 335, 478 + i * 16, dv, { 'font-size': 12, fill: INK }));
+
+  const CYCLE = { to: 45, up: 4.0, hold: 3.0, down: 3.0, rest: 1.5 };
+
+  return {
+    viewBox: [20, 80, 600, 470],
+    rest: 3,
+    tick(t) {
+      const [theta] = tiltCycle(t, CYCLE);
+      const rad = theta * DEG;
+
+      // Move crank
+      const ex = cx + crankLen * Math.cos(rad);
+      const ey = cy - crankLen * Math.sin(rad);
+      crank.setAttribute('x2', ex);
+      crank.setAttribute('y2', ey);
+      crankEnd.setAttribute('cx', ex);
+      crankEnd.setAttribute('cy', ey);
+
+      // Chord line from initial position to current position
+      chordLine.setAttribute('x1', cx + crankLen);
+      chordLine.setAttribute('y1', cy);
+      chordLine.setAttribute('x2', ex);
+      chordLine.setAttribute('y2', ey);
+
+      // Angle arc
+      if (theta > 0.5) {
+        const tip = [cx + arcR * Math.cos(rad), cy - arcR * Math.sin(rad)];
+        angleArc.setAttribute('d',
+          `M${cx},${cy} L${cx + arcR},${cy} A${arcR},${arcR} 0 0 0 ${tip[0].toFixed(1)},${tip[1].toFixed(1)} Z`
+        );
+      } else {
+        angleArc.setAttribute('d', '');
+      }
+
+      angleText.textContent = `θ = ${Math.round(theta)}°`;
+      angleText.setAttribute('x', cx + arcR + 18);
+      angleText.setAttribute('y', cy - 30);
+
+      // Live s value
+      const s = 2 * 60 * Math.sin(rad / 2);
+      sValue.textContent = `s = ${s.toFixed(1)} mm`;
+
+      // Show pin check and design values when at 45°
+      const atFull = theta >= 44.5 ? 1 : 0;
+      const fadeIn = ease(atFull);
+      pinCheck.setAttribute('opacity', fadeIn);
+      designVals.setAttribute('opacity', fadeIn);
+    },
+  };
+}
+
+/* ================================================================== *
+ * Each rod moves four blades (step 8)
+ * ================================================================== */
+
+function bladesDiagram(g) {
+  const mech = drawMechanism(g, [300, 280], 1);
+
+  // Highlight one arm region
+  label(g, 300, 510, 'One rod connects to four blades through 60 mm crank arms', {
+    'text-anchor': 'middle', 'font-size': 13, fill: INK,
+  });
+  label(g, 300, 530, 'All 24 blades rotate simultaneously — one actuator, all six rods', {
+    'text-anchor': 'middle', 'font-size': 12, 'font-weight': 700, fill: ORANGE,
+  });
+
+  const CYCLE = { to: 45, up: 2.5, hold: 1.5, down: 2.0, rest: 1.0 };
+
+  return {
+    viewBox: [30, 30, 560, 520],
+    rest: 2,
+    tick(t) {
+      const [theta] = tiltCycle(t, CYCLE);
+      mech.pose(theta);
+    },
+  };
+}
+
+/* ================================================================== *
+ * Opening sequence (step 9)
+ * ================================================================== */
+
+function openDiagram(g) {
+  const mech = drawMechanism(g, [300, 280], 1);
+
+  // Chain: controller → disc → pins → rods → cranks → blades → feedback → stop
+  const chainLabels = [
+    'Controller commands',
+    'Disc rotates ≈45°',
+    'Pins push rods outward',
+    'Crank arms rotate blades',
+    'All 24 blades reach ≈45°',
+    'Feedback confirms → stop',
+  ];
+  const chainY = 500;
+  const chainEls = chainLabels.map((text, i) => {
+    const x = 35 + i * 95;
+    const chip = svg('rect', { x, y: chainY, width: 88, height: 28, rx: 6, fill: '#fff', stroke: '#D9DEE4', 'stroke-width': 1 }, g);
+    label(g, x + 44, chainY + 18, text, { 'text-anchor': 'middle', 'font-size': 8, fill: INK });
+    if (i < chainLabels.length - 1) {
+      svg('path', { d: `M${x + 90},${chainY + 14} l8,0`, stroke: ORANGE, 'stroke-width': 1.5 }, g);
+    }
+    return chip;
+  });
+
+  const duration = label(g, 300, 550, 'Real time ≈15 s', {
+    'text-anchor': 'middle', 'font-weight': 700, 'font-size': 14, fill: INK, opacity: 0,
+  });
+
+  const angleLabel = label(g, 300, 470, '', {
+    'text-anchor': 'middle', 'font-weight': 800, 'font-size': 20, fill: ORANGE,
+  });
+
+  // 7 seconds total: sweep 0→45, then hold
+  const CYCLE = { to: 45, up: 4.0, hold: 3.0, down: 0.001, rest: 2.0 };
+
+  return {
+    viewBox: [10, 30, 610, 550],
+    rest: 2,
+    tick(t) {
+      const [theta] = tiltCycle(t, CYCLE);
+      mech.pose(theta);
+
+      angleLabel.textContent = `${Math.round(theta)}°`;
+
+      // Highlight chain chips in sequence
+      const phase = t / 4.0; // which chain step is active
+      chainEls.forEach((chip, i) => {
+        const active = phase >= i * 0.6 && phase < (i + 1) * 0.6 + 0.3;
+        chip.setAttribute('stroke', active ? ORANGE : '#D9DEE4');
+        chip.setAttribute('stroke-width', active ? 2 : 1);
+        chip.setAttribute('fill', active ? '#FFF8F0' : '#fff');
+      });
+
+      duration.setAttribute('opacity', theta > 40 ? 1 : 0);
+    },
+  };
+}
+
+/* ================================================================== *
+ * Closing sequence (step 10)
+ * ================================================================== */
+
+function closeDiagram(g) {
+  const mech = drawMechanism(g, [300, 280], 1);
+
+  label(g, 300, 500, 'The mechanism can stop at any intermediate angle', {
+    'text-anchor': 'middle', 'font-size': 13, fill: INK,
+  });
+
+  const angleLabel = label(g, 300, 470, '', {
+    'text-anchor': 'middle', 'font-weight': 800, 'font-size': 20, fill: ORANGE,
+  });
+
+  // Intermediate stop indicators
+  const stopLabel = label(g, 300, 530, '', {
+    'text-anchor': 'middle', 'font-weight': 700, 'font-size': 14, fill: BLUE, opacity: 0,
+  });
+
+  // Animation: close from 45→0, then pause at intermediate stops
+  // Phase 1 (0–4s): close 45→0
+  // Phase 2 (4–12s): show intermediate stops: 40°, 30°, 20°, 10°
+  const totalCycle = 14;
+  const intermediateStops = [40, 30, 20, 10];
+
+  return {
+    viewBox: [30, 30, 560, 520],
+    rest: 2,
+    tick(t) {
+      const ct = t % totalCycle;
+      let theta;
+      let stopText = '';
+
+      if (ct < 4) {
+        // Close: 45 → 0
+        theta = 45 * (1 - ease(ct / 3.5));
+      } else if (ct < 12) {
+        // Intermediate stops
+        const phase = (ct - 4) / 2; // 0–4, each stop gets 2s
+        const idx = Math.min(Math.floor(phase), intermediateStops.length - 1);
+        const frac = phase - idx;
+        if (frac < 0.3) {
+          // Sweep to stop angle
+          const from = idx === 0 ? 0 : intermediateStops[idx - 1];
+          theta = from + (intermediateStops[idx] - from) * ease(frac / 0.3);
+        } else {
+          theta = intermediateStops[idx];
+        }
+        stopText = `Intermediate stop: ${intermediateStops[idx]}°`;
+      } else {
+        // Return to 0
+        theta = 10 * (1 - ease((ct - 12) / 1.5));
+      }
+
+      mech.pose(theta);
+      angleLabel.textContent = `${Math.round(theta)}°`;
+
+      stopLabel.textContent = stopText;
+      stopLabel.setAttribute('opacity', stopText ? 1 : 0);
+    },
+  };
+}
+
+/* ================================================================== *
  * Building them
- * ------------------------------------------------------------------ */
+ * ================================================================== */
 
 /**
  * Builds every diagram into `root` (an <svg>), each in its own group, kept
  * in <defs> until shown.
- * @returns {{ defs: SVGDefsElement, diagrams: Record<string, {g, viewBox, tick, rest, inputs?}> }}
+ * @returns {{ defs: SVGDefsElement, diagrams: Record<string, {g, viewBox, tick, rest}> }}
  */
 export function buildControlDiagrams(root) {
   const defs = svg('defs', {}, root);
+  // Orange arrow marker
   const m = svg('marker', {
     id: 'arrow-orange',
     viewBox: '0 0 10 10',
@@ -596,12 +978,29 @@ export function buildControlDiagrams(root) {
   }, defs);
   svg('path', { d: 'M0,0 L10,5 L0,10 z', fill: ORANGE }, m);
 
+  // Blue arrow marker (for feedback lines)
+  const mb = svg('marker', {
+    id: 'arrow-blue',
+    viewBox: '0 0 10 10',
+    refX: 6,
+    refY: 5,
+    markerWidth: 4.2,
+    markerHeight: 4.2,
+    orient: 'auto-start-reverse',
+  }, defs);
+  svg('path', { d: 'M0,0 L10,5 L0,10 z', fill: BLUE }, mb);
+
   const diagrams = {};
   for (const [name, build] of Object.entries({
-    arduino: arduinoDiagram,
-    servo: servoDiagram,
-    linkage: linkageDiagram,
-    louvres: louvresDiagram,
+    controller: controllerDiagram,
+    command: commandDiagram,
+    disc: discDiagram,
+    pins: pinsDiagram,
+    rod: rodDiagram,
+    calc: calcDiagram,
+    blades: bladesDiagram,
+    open: openDiagram,
+    close: closeDiagram,
   })) {
     const g = svg('g', {}, defs);
     diagrams[name] = { g, ...build(g) };
