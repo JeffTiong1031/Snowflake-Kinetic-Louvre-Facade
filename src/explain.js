@@ -6,15 +6,21 @@
  *
  * It opens with the control chain -- IP68 sensors, the controller, the DCL-10
  * actuator, the drive disc, eccentric pins, slotted rods, and blades -- built
- * up step by step in a strip across the top, earlier steps greyed. The sensors
- * are shown in the 3D view; the parts the 3D model does not have (the disc,
- * pins, rods, crank arms) are shown in 2D diagram panels.
+ * up step by step in a strip across the top, earlier steps greyed.
+ *
+ * The 3D snowflake module is the primary visual for every step. The 2D diagrams
+ * only appear as smaller support panels where the 3D cannot show something
+ * clearly: the controller table (step 2), the signal interface (step 3), the
+ * pin-in-slot detail (step 6), and the formula (step 7).
+ *
+ * Explanation-only 3D parts (DCL-10 actuator, drive disc, eccentric pins,
+ * slots, rod extensions, crank arms) exist only in this mode, on the focus
+ * module's stand-in copy.
  *
  * While it runs it owns the louvre states. Every module takes the same pose as
- * the one being explained, so the whole face reads as one. And while it runs,
- * the focus module's fixed parts are drawn by a copy of their own, its instance
- * in the facade hidden, so the frames of its two sensor tips can turn
- * see-through.
+ * the one being explained, so the whole face reads as one. Highlights are
+ * extra meshes laid over the real parts -- copies of the focus module's
+ * instances, re-read from the facade each frame.
  */
 
 import * as THREE from 'three';
@@ -23,17 +29,23 @@ import {
   buildBladeLayout,
   buildModuleStaticGeometry,
   buildTipGeometry,
+  buildHubGeometry,
+  slatOutlines,
   tipPanelCentre,
   MODULE_BLADE_COUNT,
+  sliderShift,
 } from './snowflakeModule.js';
 import { buildLdrSensor } from './ldrSensor.js';
-import { buildControlDiagrams } from './controlDiagrams.js';
+import { buildControlDiagrams, tiltCycle } from './controlDiagrams.js';
+import { buildExplainMechanism } from './explainMechanism.js';
 
 const DEG = Math.PI / 180;
 const clamp01 = (x) => (x < 0 ? 0 : x > 1 ? 1 : x);
 const easeOut = (x) => 1 - (1 - clamp01(x)) ** 3;
 
 const GAPS = C.ARM_COUNT;
+const ROW_COUNT = C.SLAT_WIDTHS.length;
+const PER_ROW = MODULE_BLADE_COUNT / ROW_COUNT;
 
 const HIGHLIGHT = 0xff8a1f;
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -44,7 +56,7 @@ const SUN_DIR = new THREE.Vector3(-0.55, 0.5, 0.67).normalize();
 /** The two IP68 sensor arms: upper-left (arm 5) and lower-right (arm 2). */
 const SENSOR_ARMS = [5, 2];
 
-/** Each sensor's reading with the sun there, percent of full light: the upper left faces it. */
+/** Each sensor's reading with the sun there, percent of full light. */
 const READINGS = { UL: 92, LR: 21 };
 
 /** One open-close stroke of the mechanism steps, seconds. */
@@ -62,14 +74,15 @@ const VIEWS = {
   sensor: { eye: [0.3, 0.1, 2.9], at: [0, -0.12, 0] },
   // The module left of centre, clear of the diagram panel on the right.
   panel: { eye: [1.6, -0.05, 5.0], at: [1.43, -0.2, 0] },
+  // Close on the hub to show disc/actuator/pins.
+  hub: { eye: [0.15, 0.3, 1.5], at: [0, 0, 0] },
+  // Close on one gap (the focus gap).
+  gap: { eye: [0.95, 0.45, 1.5], at: [0.45, 0, 0] },
+  // Side view.
+  side: { eye: [1.65, 0.4, 0.65], at: [0.42, 0, -0.02] },
 };
 
-/** Which corner a sensor arm is in. */
-const sensorCorner = (arm) => {
-  const c = tipPanelCentre(arm);
-  return (c.y > 0 ? 'U' : '') + (c.x < 0 ? 'L' : '') + (c.y <= 0 ? 'L' : '') + (c.x >= 0 ? 'R' : '');
-};
-
+const stroke = (t) => 0.5 + 0.5 * Math.cos((2 * Math.PI * t) / STROKE_PERIOD);
 /** A blade tilt from open (0°, edge-on) in degrees, as a louvre state (1 = open). */
 const tiltToState = (deg) => 1 - deg / 90;
 
@@ -77,6 +90,9 @@ const ARROW_SVG =
   '<svg viewBox="0 0 40 20" width="40" height="20" aria-hidden="true">' +
   '<line x1="3" y1="10" x2="26" y2="10" stroke="#F0932B" stroke-width="6" stroke-linecap="round"/>' +
   '<path d="M23,2 L38,10 L23,18 z" fill="#F0932B"/></svg>';
+
+/** Tilt cycle for the mechanism demo steps. */
+const MECH_CYCLE = { to: 45, up: 2.5, hold: 1.5, down: 2.0, rest: 1.0 };
 
 export function createExplainMode({ scene, camera, canvas, facade, flyTo, onExit }) {
   const layout = buildBladeLayout();
@@ -87,6 +103,10 @@ export function createExplainMode({ scene, camera, canvas, facade, flyTo, onExit
   const origin = facade.modulePos[focus];
   const toWorld = (v) => v.clone().applyQuaternion(faceQuat).add(origin);
   const local = (x, y, z) => new THREE.Vector3(x, y, z);
+
+  const bisectors = Array.from({ length: GAPS }, (_, g) => layout.find((e) => e.gap === g).bisector);
+  /** The gap whose centre line points most nearly along +X. */
+  const focusGap = bisectors.reduce((best, b, g) => (b.x > bisectors[best].x ? g : best), 0);
 
   /* -------------------------------------------------------------- *
    * The sun arrow, landing on the sensor that faces it
@@ -107,7 +127,99 @@ export function createExplainMode({ scene, camera, canvas, facade, flyTo, onExit
   let arrowGrow = 0;
 
   /* -------------------------------------------------------------- *
-   * The focus module's own copy, with see-through sensor tips
+   * Highlights over the real parts
+   * -------------------------------------------------------------- */
+
+  const glow = new THREE.MeshStandardMaterial({
+    color: 0xffa04a,
+    emissive: HIGHLIGHT,
+    emissiveIntensity: 0.45,
+    metalness: 0.3,
+    roughness: 0.5,
+    polygonOffset: true,
+    polygonOffsetFactor: -1,
+    polygonOffsetUnits: -4,
+  });
+  const xray = new THREE.MeshBasicMaterial({
+    color: HIGHLIGHT,
+    transparent: true,
+    opacity: 0.9,
+    depthTest: false,
+    depthWrite: false,
+    toneMapped: false,
+    fog: false,
+  });
+
+  const { bladeMeshes, carriageMesh, linkMesh, lugMesh } = facade.meshes;
+
+  /** A copy of some of a mesh's instances, re-read each frame so it follows them. */
+  function mirror(source, indices, material, renderOrder) {
+    const mesh = new THREE.InstancedMesh(source.geometry, material, indices.length);
+    mesh.frustumCulled = false;
+    mesh.renderOrder = renderOrder;
+    mesh.visible = false;
+    scene.add(mesh);
+    const m = new THREE.Matrix4();
+    return {
+      mesh,
+      sync() {
+        for (let i = 0; i < indices.length; i++) {
+          source.getMatrixAt(indices[i], m);
+          mesh.setMatrixAt(i, m);
+        }
+        mesh.instanceMatrix.needsUpdate = true;
+      },
+    };
+  }
+
+  // Each slat's slot in its row mesh, as the facade numbers them.
+  const slotOf = [];
+  {
+    const next = new Array(ROW_COUNT).fill(0);
+    layout.forEach((e) => slotOf.push(next[e.row]++));
+  }
+  const slatIndices = Array.from({ length: ROW_COUNT }, () => []);
+  layout.forEach((e, b) => {
+    if (e.gap === focusGap) slatIndices[e.row].push(focus * PER_ROW + slotOf[b]);
+  });
+
+  function driveOf(gaps) {
+    const blades = [];
+    layout.forEach((e, b) => {
+      if (gaps.includes(e.gap)) blades.push(focus * MODULE_BLADE_COUNT + b);
+    });
+    return [
+      mirror(carriageMesh, gaps.map((g) => focus * GAPS + g), xray, 3),
+      mirror(linkMesh, blades, xray, 3),
+      mirror(lugMesh, blades, xray, 3),
+    ];
+  }
+
+  const overlays = {
+    slats: bladeMeshes.map((mesh, r) => mirror(mesh, slatIndices[r], glow, 2)),
+    driveFocus: driveOf([focusGap]),
+    driveAll: driveOf([...Array(GAPS).keys()]),
+  };
+
+  // The focus gap's hinge lines: along each slat's outer edge, where it turns.
+  const hinges = new THREE.Group();
+  {
+    const outlines = slatOutlines();
+    layout.forEach((e) => {
+      if (e.gap !== focusGap) return;
+      const [[x0], [x1]] = outlines[e.row];
+      const a = local(x0 * C.MM, 0, 0).applyQuaternion(e.quat).add(e.origin);
+      const b = local(x1 * C.MM, 0, 0).applyQuaternion(e.quat).add(e.origin);
+      hinges.add(rod(toWorld(a), toWorld(b), 0.004, xray));
+    });
+  }
+  hinges.visible = false;
+  hinges.renderOrder = 3;
+  hinges.children.forEach((c) => (c.renderOrder = 3));
+  scene.add(hinges);
+
+  /* -------------------------------------------------------------- *
+   * The focus module's own copy, with see-through sensor tips and hub
    * -------------------------------------------------------------- */
 
   const { staticMesh, pvMesh } = facade.meshes;
@@ -120,26 +232,33 @@ export function createExplainMode({ scene, camera, canvas, facade, flyTo, onExit
   const ghostPv = pvMesh.material.clone();
   ghostAluminium.transparent = true;
   ghostPv.transparent = true;
+
+  // Hub as separate meshes for see-through control
+  const ghostHubAlu = staticMesh.material.clone();
+  const ghostHubPv = pvMesh.material.clone();
+  ghostHubAlu.transparent = true;
+  ghostHubPv.transparent = true;
   {
-    const rest = buildModuleStaticGeometry({ omitTips: SENSOR_ARMS });
+    const rest = buildModuleStaticGeometry({ omitTips: SENSOR_ARMS, omitHub: true });
     const tips = buildTipGeometry(SENSOR_ARMS);
+    const hubGeo = buildHubGeometry();
     for (const [geometry, material] of [
       [rest.aluminium, staticMesh.material],
       [rest.pv, pvMesh.material],
       [tips.aluminium, ghostAluminium],
       [tips.pv, ghostPv],
+      [hubGeo.aluminium, ghostHubAlu],
+      [hubGeo.pv, ghostHubPv],
     ]) {
       const mesh = new THREE.Mesh(geometry, material);
       mesh.castShadow = true;
       mesh.receiveShadow = true;
-      // The see-through sensor frames are not surfaces for the ambient occlusion to shade.
       mesh.userData.noAO = material.transparent;
       standInCopy.add(mesh);
     }
   }
 
-  // An IP68 light sensor inside each sensor tip's frame. With the sun on them,
-  // each glows as brightly as it reads.
+  // IP68 light sensors inside each sensor tip's frame
   const glowSize = 0.13;
   const glowTexture = ringGlow(((C.LDR_DIAMETER / 2) * C.MM * 1.15) / (glowSize / 2));
   const shadeZ = (C.TIP_PANEL_THICKNESS / 2 + C.TIP_PV_RISE + 2) * C.MM;
@@ -170,7 +289,6 @@ export function createExplainMode({ scene, camera, canvas, facade, flyTo, onExit
     halo.visible = false;
     standInCopy.add(halo);
 
-    // Shade: a dark diamond over the tip, as deep as the sensor is short of full light.
     const a = (arm * 60 + C.ARM_PHASE_DEG) * DEG;
     const h = (C.TIP_PANEL_SIZE / Math.SQRT2) * C.MM;
     const point = (u, v) =>
@@ -188,9 +306,24 @@ export function createExplainMode({ scene, camera, canvas, facade, flyTo, onExit
   });
   scene.add(standInCopy);
 
-  // The focus module's instance in the facade, and the one that hides it.
+  /* -------------------------------------------------------------- *
+   * Explanation-only mechanism parts (DCL-10, disc, pins, etc.)
+   * -------------------------------------------------------------- */
+
+  // Carriage inner end position (mm from centre along bisector)
+  const carriageStart = 456; // approximate, from buildCarriageGeometry
+  const mechanism = buildExplainMechanism(standInCopy, bisectors, carriageStart);
+
+  // Crank arm overlays for the focus gap's blades
+  const focusBlades = layout.filter((e) => e.gap === focusGap);
+  const crankArms = mechanism.buildCrankArms(focusBlades);
+
+  /* -------------------------------------------------------------- *
+   * Stand-in show/hide and ghost control
+   * -------------------------------------------------------------- */
+
   const shownMatrix = new THREE.Matrix4();
-  staticMesh.getMatrixAt(focus, shownMatrix); // fixed parts: this never changes
+  staticMesh.getMatrixAt(focus, shownMatrix);
   const hiddenMatrix = new THREE.Matrix4().makeScale(0, 0, 0);
 
   function standIn(on) {
@@ -208,8 +341,15 @@ export function createExplainMode({ scene, camera, canvas, facade, flyTo, onExit
     ghostPv.opacity = opacity;
   }
 
+  let hubGhost = 1;
+  function setHubGhost(opacity) {
+    hubGhost = opacity;
+    ghostHubAlu.opacity = opacity;
+    ghostHubPv.opacity = opacity;
+  }
+
   /* -------------------------------------------------------------- *
-   * The diagram panel: the parts the 3D model does not have
+   * The diagram panel
    * -------------------------------------------------------------- */
 
   const diagramPanel = document.getElementById('explainDiagram');
@@ -236,9 +376,10 @@ export function createExplainMode({ scene, camera, canvas, facade, flyTo, onExit
   }
 
   /* -------------------------------------------------------------- *
-   * Labels for the 3D sensor view
+   * Labels
    * -------------------------------------------------------------- */
 
+  const polar = (deg, r, z) => local(Math.cos(deg * DEG) * r, Math.sin(deg * DEG) * r, z);
   const LABELS = [
     ...SENSOR_ARMS.map((arm, idx) => {
       const c = tipPanelCentre(arm);
@@ -249,11 +390,22 @@ export function createExplainMode({ scene, camera, canvas, facade, flyTo, onExit
         at: c.clone().setZ(C.LDR_DEPTH * C.MM),
         dx: Math.sign(c.x) * 40,
         dy: -Math.sign(c.y) * 60,
-        bare: true, // no dot: it would sit right on the sensor
+        bare: true,
       };
     }),
+    { set: 'mech', text: 'DCL-10 actuator', at: local(0, 0, C.HUB_Z_OFFSET * C.MM - 0.04), dx: -100, dy: 80 },
+    { set: 'mech', text: 'Drive disc', at: local(0.07, 0.07, C.HUB_Z_OFFSET * C.MM + 0.02), dx: 100, dy: -60 },
+    { set: 'mech', text: 'Output shaft', at: local(0, 0, C.HUB_Z_OFFSET * C.MM), dx: 60, dy: 50 },
+    { set: 'pin', text: 'Drive pin', at: local(0.065, 0, C.HUB_Z_OFFSET * C.MM + 0.02), dx: 80, dy: -40, bare: true },
+    { set: 'pin', text: 'Eccentric radius', at: local(0.033, 0, C.HUB_Z_OFFSET * C.MM + 0.02), dx: -90, dy: 60 },
+    { set: 'rod', text: 'Transverse slot', at: local(0.065, 0, C.HUB_Z_OFFSET * C.MM + 0.02), dx: -80, dy: -50 },
+    { set: 'rod', text: 'Sliding rod', at: polar(0, 0.35, -0.03), dx: 100, dy: -40 },
+    { set: 'rod', text: 'Guide channel', at: polar(0, 0.25, 0), dx: -90, dy: 70 },
+    { set: 'blade', text: 'Crank arm', at: polar(0, 0.4, -0.01), dx: 80, dy: -50, bare: true },
+    { set: 'blade', text: 'Fixed pivot shaft', at: polar(0, 0.38, 0.02), dx: -100, dy: -40 },
+    { set: 'blade', text: 'Linkage joint', at: polar(0, 0.42, -0.03), dx: 90, dy: 60, bare: true },
+    { set: 'blade', text: 'Sliding rod', at: polar(0, 0.30, -0.03), dx: -80, dy: 80 },
   ];
-  /** Which set of labels is up, if any. */
   let labelSet = null;
 
   const labelLayer = document.getElementById('explainLabels');
@@ -272,7 +424,6 @@ export function createExplainMode({ scene, camera, canvas, facade, flyTo, onExit
     let bar = null;
     let value = null;
     if (def.set === 'sensor') {
-      // The sensor's reading, shown in the sensor step.
       const reading = document.createElement('span');
       reading.className = 'reading';
       bar = document.createElement('i');
@@ -301,7 +452,6 @@ export function createExplainMode({ scene, camera, canvas, facade, flyTo, onExit
       for (const el of [l.line, l.dot, l.tag]) el.style.visibility = shown ? '' : 'hidden';
       l.dot.setAttribute('cx', x);
       l.dot.setAttribute('cy', y);
-      // A bare label's line stops short of its point, leaving what it names in view.
       const start = l.bare ? 16 / Math.hypot(l.dx, l.dy) : 0;
       l.line.setAttribute('x1', x + l.dx * start);
       l.line.setAttribute('y1', y + l.dy * start);
@@ -315,7 +465,6 @@ export function createExplainMode({ scene, camera, canvas, facade, flyTo, onExit
       const grow = easeOut((t - 0.15) / 0.9);
       sensorLabels.forEach((l, k) => {
         const base = l.key === 'UL' ? READINGS.UL : READINGS.LR;
-        // Settled readings flicker a little, as a real sensor does.
         const v = base * grow * (1 + 0.025 * Math.sin(t * 2.2 + k * 1.3) * grow);
         l.bar.style.width = `${v.toFixed(1)}%`;
         l.value.textContent = `${Math.round(v)}%`;
@@ -325,9 +474,6 @@ export function createExplainMode({ scene, camera, canvas, facade, flyTo, onExit
 
   /* -------------------------------------------------------------- *
    * The steps
-   *
-   * The control chain first (chain: its place in the strip), each with a
-   * short visible line. Then the mechanism details.
    * -------------------------------------------------------------- */
 
   const STEPS = [
@@ -347,7 +493,7 @@ export function createExplainMode({ scene, camera, canvas, facade, flyTo, onExit
       sensors: true,
       labels: 'sensor',
       readings: true,
-      pose: () => 1, // 0° = state 1 (edge-on, open)
+      pose: () => 1,
     },
     {
       chain: 1,
@@ -390,9 +536,13 @@ export function createExplainMode({ scene, camera, canvas, facade, flyTo, onExit
         'A steel drive disc is fixed to the shaft. It turns ≈45° for full blade movement, taking ≈15 s.',
       notes:
         '90° takes 30 s, so 45° takes 15 s. The disc is keyed or splined to the output shaft.',
-      view: 'panel',
-      diagram: 'disc',
+      view: 'hub',
+      hubGhost: true,
+      mechVisible: true,
+      labels: 'mech',
+      tau: 0.25,
       pose: () => 1,
+      mechPose: (t) => tiltCycle(t, MECH_CYCLE)[0],
     },
     {
       chain: 4,
@@ -404,26 +554,37 @@ export function createExplainMode({ scene, camera, canvas, facade, flyTo, onExit
       notes:
         'The pins sit away from the disc centre (the eccentric radius), so each pin follows a ' +
         'circular path around the shaft.',
-      view: 'panel',
-      diagram: 'pins',
+      view: 'hub',
+      hubGhost: true,
+      mechVisible: true,
+      showOrbits: true,
+      labels: 'pin',
+      tau: 0.25,
       pose: () => 1,
+      mechPose: (t) => tiltCycle(t, MECH_CYCLE)[0],
     },
     {
       chain: 5,
       short: 'Slotted rods',
       title: 'The slotted rod converts rotation into linear movement',
       text:
-        'Each sliding rod runs in a guide channel along one structural arm. The pin\'s radial component ' +
-        'pushes the rod; the sideways component is absorbed by the pin sliding across the slot.',
+        'Each sliding rod runs in a guide channel along the centre line of each region. The pin\'s radial ' +
+        'component pushes the rod; the sideways component is absorbed by the pin sliding across the slot.',
       notes:
         'Disc rotation → pin circular movement → guided rod linear movement. All six pins share the ' +
         'same geometry, so all six rods move together by the same distance.',
-      view: 'panel',
-      diagram: 'rod',
-      pose: () => 1,
+      view: 'gap',
+      hubGhost: true,
+      mechVisible: true,
+      labels: 'rod',
+      diagram: 'slot',
+      show: ['driveFocus'],
+      tau: 0.25,
+      pose: (g, t) => tiltToState(tiltCycle(t, MECH_CYCLE)[0]),
+      mechPose: (t) => tiltCycle(t, MECH_CYCLE)[0],
     },
     {
-      // No chain — this is a calculation step, chain strip hidden
+      // No chain — calculation step, chain strip hidden
       title: 'Required slider movement',
       text:
         'With crank arm a = 60 mm and θ = 45°, the chord movement is s = 2a·sin(θ/2) ≈ 46 mm. ' +
@@ -431,46 +592,108 @@ export function createExplainMode({ scene, camera, canvas, facade, flyTo, onExit
       notes:
         'Design values: eccentric pin radius ≈ 65 mm, slider stroke ≈ 46 mm, crank arm ≈ 60 mm, ' +
         'blade rotation 0°–45°.',
-      view: 'panel',
+      view: 'gap',
       diagram: 'calc',
-      pose: () => 1,
+      mechVisible: true,
+      showCranks: true,
+      show: ['slats', 'hinges'],
+      labels: 'blade',
+      tau: 0.25,
+      pose: (g, t) => tiltToState(tiltCycle(t, MECH_CYCLE)[0]),
+      mechPose: (t) => tiltCycle(t, MECH_CYCLE)[0],
     },
     {
       chain: 6,
       short: 'Blades',
-      title: 'Each sliding rod moves four blades',
+      title: 'Each sliding rod moves eight blades',
       text:
-        'One rod per arm connects to four blades through 60 mm crank arms and linkage joints. ' +
-        'When the rod moves outward, the crank arms rotate all four blades together. ' +
-        'One actuator moves all six rods, so all 24 blades rotate simultaneously.',
+        'One rod per region connects to eight blades through crank arms and linkage joints. ' +
+        'When the rod moves inward, the crank arms rotate all eight blades together. ' +
+        'One actuator moves all six rods, so all 48 blades rotate simultaneously.',
       notes:
-        'Each blade has a fixed pivot shaft, a 60 mm crank arm, a pinned or spherical linkage joint, ' +
+        'Each blade has a fixed pivot shaft, a crank arm, a pinned or spherical linkage joint, ' +
         'and a connection to the common rod.',
-      view: 'panel',
-      diagram: 'blades',
-      pose: () => 1,
+      view: 'gap',
+      mechVisible: true,
+      showCranks: true,
+      show: ['driveFocus'],
+      labels: 'blade',
+      tau: 0.25,
+      pose: (g, t) => tiltToState(tiltCycle(t, MECH_CYCLE)[0]),
+      mechPose: (t) => tiltCycle(t, MECH_CYCLE)[0],
+      zoomOut: true, // zoom from gap to oblique partway
     },
     {
-      chainAll: true, // show all chips lit, with sequential highlight
+      chainAll: true,
       title: 'Shading movement (0° → 45°)',
       text:
-        'The controller commands the actuator → disc rotates ≈45° → pins push rods outward ≈46 mm → ' +
+        'The controller commands the actuator → disc rotates ≈45° → each pin pulls its sliding rod inward → ' +
         'crank arms rotate blades to ≈45° → feedback confirms → actuator stops. Real time ≈15 s.',
-      view: 'panel',
-      diagram: 'open',
-      pose: () => 1,
+      view: 'oblique',
+      hubGhost: true,
+      mechVisible: true,
+      show: ['driveAll'],
+      tau: 0.15,
+      pose: (g, t) => {
+        const [theta] = tiltCycle(t, { to: 45, up: 4.0, hold: 3.0, down: 0.001, rest: 2.0 });
+        return tiltToState(theta);
+      },
+      mechPose: (t) => tiltCycle(t, { to: 45, up: 4.0, hold: 3.0, down: 0.001, rest: 2.0 })[0],
     },
     {
       chainAll: true,
       title: 'Return movement (45° → 0°)',
       text:
-        'The actuator reverses → pins pull rods inward → crank arms pull blades back toward 0° → ' +
-        'feedback confirms the position → actuator stops. The mechanism can stop at any intermediate angle.',
+        'The actuator reverses → the six drive pins push the sliding rods outward → the rods push the blade ' +
+        'crank arms → blades return toward 0° → feedback confirms → actuator stops. ' +
+        'The mechanism can stop at any intermediate angle.',
       notes:
         'The mechanism can also stop at intermediate angles such as 10°, 20°, 30° or 40°.',
-      view: 'panel',
-      diagram: 'close',
-      pose: () => 1,
+      view: 'oblique',
+      hubGhost: true,
+      mechVisible: true,
+      show: ['driveAll'],
+      tau: 0.15,
+      pose: (g, t) => {
+        // Close 45→0, then intermediate stops
+        const totalCycle = 14;
+        const ct = t % totalCycle;
+        const intermediateStops = [40, 30, 20, 10];
+        let theta;
+        if (ct < 4) {
+          theta = 45 * (1 - easeOut(ct / 3.5));
+        } else if (ct < 12) {
+          const phase = (ct - 4) / 2;
+          const idx = Math.min(Math.floor(phase), intermediateStops.length - 1);
+          const frac = phase - idx;
+          if (frac < 0.3) {
+            const from = idx === 0 ? 0 : intermediateStops[idx - 1];
+            theta = from + (intermediateStops[idx] - from) * easeOut(frac / 0.3);
+          } else {
+            theta = intermediateStops[idx];
+          }
+        } else {
+          theta = 10 * (1 - easeOut((ct - 12) / 1.5));
+        }
+        return tiltToState(theta);
+      },
+      mechPose: (t) => {
+        const totalCycle = 14;
+        const ct = t % totalCycle;
+        const intermediateStops = [40, 30, 20, 10];
+        if (ct < 4) return 45 * (1 - easeOut(ct / 3.5));
+        if (ct < 12) {
+          const phase = (ct - 4) / 2;
+          const idx = Math.min(Math.floor(phase), intermediateStops.length - 1);
+          const frac = phase - idx;
+          if (frac < 0.3) {
+            const from = idx === 0 ? 0 : intermediateStops[idx - 1];
+            return from + (intermediateStops[idx] - from) * easeOut(frac / 0.3);
+          }
+          return intermediateStops[idx];
+        }
+        return 10 * (1 - easeOut((ct - 12) / 1.5));
+      },
     },
   ];
 
@@ -499,7 +722,6 @@ export function createExplainMode({ scene, camera, canvas, facade, flyTo, onExit
     chips.push(chip);
   });
 
-  /** Shows the chain up to step c (its index in the strip); 'all' lights every chip; undefined hides. */
   function showChain(c) {
     if (c === undefined) {
       chainEl.hidden = true;
@@ -524,7 +746,6 @@ export function createExplainMode({ scene, camera, canvas, facade, flyTo, onExit
       chip.classList.toggle('active', k === c);
     });
     chainArrows.forEach((a, k) => {
-      // Arrow k runs from step k into step k + 1.
       a.classList.toggle('shown', k + 1 <= c);
       a.classList.toggle('past', k + 1 < c);
     });
@@ -579,6 +800,20 @@ export function createExplainMode({ scene, camera, canvas, facade, flyTo, onExit
       arrow.visible = false;
     }
 
+    // Overlay visibility
+    const show = step.show ?? [];
+    for (const key of ['slats', 'driveFocus', 'driveAll']) {
+      for (const o of overlays[key]) o.mesh.visible = show.includes(key);
+    }
+    hinges.visible = show.includes('hinges');
+
+    // Mechanism parts
+    mechanism.setVisible(!!step.mechVisible);
+    mechanism.showOrbits(!!step.showOrbits);
+
+    // Crank arm overlays
+    for (const arm of crankArms) arm.visible = !!step.showCranks;
+
     labelSet = step.labels ?? null;
     labelLayer.hidden = !labelSet;
     labelLayer.classList.toggle('readings', !!step.readings);
@@ -631,7 +866,7 @@ export function createExplainMode({ scene, camera, canvas, facade, flyTo, onExit
     active = true;
     step = null;
     card.hidden = false;
-    document.body.classList.add('explaining'); // the side panel steps aside
+    document.body.classList.add('explaining');
     standIn(true);
     go(0);
   }
@@ -646,11 +881,17 @@ export function createExplainMode({ scene, camera, canvas, facade, flyTo, onExit
     showChain(undefined);
     standIn(false);
     setGhost(1);
+    setHubGhost(1);
+    mechanism.setVisible(false);
+    mechanism.showOrbits(false);
+    for (const arm of crankArms) arm.visible = false;
     for (const s of sensors) {
       s.halo.visible = false;
       s.shade.visible = false;
     }
     arrow.visible = false;
+    hinges.visible = false;
+    for (const list of Object.values(overlays)) for (const o of list) o.mesh.visible = false;
     onExit?.();
   }
 
@@ -668,15 +909,13 @@ export function createExplainMode({ scene, camera, canvas, facade, flyTo, onExit
 
     if (arrow.visible) {
       arrowGrow = Math.min(1, arrowGrow + dt / 0.45);
-      // Grows in from its tip, then shimmers a little, in and out along the ray.
       const pulse = 0.05 * (0.5 + 0.5 * Math.sin(t * 5));
       arrow.position.copy(sunTip).addScaledVector(sunDir, pulse);
       arrow.quaternion.setFromUnitVectors(UP, sunDir);
       arrow.scale.setScalar(1 - (1 - arrowGrow) ** 3);
     }
 
-    // The sensor tips' frames fade see-through for the sensor steps; each sensor
-    // inside glows as brightly as it reads.
+    // Sensor tip ghost
     const ghostTarget = step.sensors ? GHOST_OPACITY : 1;
     const g = ghost + (ghostTarget - ghost) * (1 - Math.exp(-dt / 0.3));
     setGhost(Math.abs(ghostTarget - g) < 1e-3 ? ghostTarget : g);
@@ -688,17 +927,53 @@ export function createExplainMode({ scene, camera, canvas, facade, flyTo, onExit
       s.shade.material.opacity = sensing * (1 - s.level) * 0.55;
     }
 
+    // Hub ghost
+    const hubTarget = step.hubGhost ? GHOST_OPACITY : 1;
+    const hg = hubGhost + (hubTarget - hubGhost) * (1 - Math.exp(-dt / 0.3));
+    setHubGhost(Math.abs(hubTarget - hg) < 1e-3 ? hubTarget : hg);
+
+    // Mechanism parts
+    if (step.mechPose) {
+      const theta = step.mechPose(t);
+      mechanism.tick(theta);
+    }
+
+    // Update crank arm overlay positions
+    if (step.showCranks) {
+      const phi = (1 - pose[focusGap]) * 90 * DEG;
+      focusBlades.forEach((entry, bi) => {
+        const arm = crankArms[bi];
+        if (!arm.visible) return;
+        // The crank arm runs from the hinge pin to the lug on the blade's back.
+        // The blade entry has origin (hinge), quat, and grip (in slat frame).
+        const hingeWorld = toWorld(entry.origin.clone());
+        const gripWorld = entry.grip.clone()
+          .applyQuaternion(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), entry.hingeSign * phi))
+          .applyQuaternion(entry.quat)
+          .add(entry.origin);
+        const gripW = toWorld(gripWorld);
+        const dir = new THREE.Vector3().subVectors(gripW, hingeWorld);
+        const len = dir.length();
+        arm.scale.set(1, len / (arm.geometry.parameters.height || 0.033), 1);
+        arm.position.addVectors(hingeWorld, gripW).multiplyScalar(0.5);
+        arm.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.normalize());
+      });
+    }
+
     if (diagram) diagram.tick(t);
     return states;
   }
 
-  /** After the facade has drawn this frame's states: bring the labels along. */
+  /** After the facade has drawn this frame's states: bring the highlights and labels along. */
   function afterBlades() {
+    for (const list of Object.values(overlays)) {
+      for (const o of list) if (o.mesh.visible) o.sync();
+    }
     if (!labelLayer.hidden) placeLabels();
   }
 
   /* -------------------------------------------------------------- *
-   * Input: a click steps, a drag stays the camera's
+   * Input
    * -------------------------------------------------------------- */
 
   let down = null;
@@ -732,8 +1007,7 @@ export function createExplainMode({ scene, camera, canvas, facade, flyTo, onExit
 }
 
 /**
- * The sun, as an arrow: tip at the origin pointing down -Y, body up +Y, so
- * turning +Y onto the sun direction points it in at the module.
+ * The sun, as an arrow: tip at the origin pointing down -Y, body up +Y.
  */
 function buildArrow() {
   const material = new THREE.MeshBasicMaterial({ color: HIGHLIGHT, toneMapped: false, fog: false });
@@ -752,10 +1026,7 @@ function buildArrow() {
   return group;
 }
 
-/**
- * A soft ring of glow, drawn on a canvas: clear out to `clear` (a fraction of
- * the radius), brightest just beyond, fading to nothing at the rim.
- */
+/** A soft ring of glow, drawn on a canvas. */
 function ringGlow(clear) {
   const size = 128;
   const r = size / 2;
@@ -773,4 +1044,13 @@ function ringGlow(clear) {
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
   return texture;
+}
+
+/** A thin rod from a to b (world). */
+function rod(a, b, radius, material) {
+  const dir = new THREE.Vector3().subVectors(b, a);
+  const mesh = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius, dir.length(), 8), material);
+  mesh.position.addVectors(a, b).multiplyScalar(0.5);
+  mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.normalize());
+  return mesh;
 }
