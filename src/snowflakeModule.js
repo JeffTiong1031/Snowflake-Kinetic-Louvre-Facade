@@ -160,6 +160,20 @@ export function sliderShift(phi) {
   return (sliderAlong(ROWS[0], phi) - sliderAlong(ROWS[0], 0)) * C.MM;
 }
 
+/**
+ * Where each row's slat ends at its spine, in that spine's own frame (mm,
+ * innermost row first): `along` out from the module centre, `offset` off the
+ * spine centreline. These are the stations at which the blades either side of
+ * an arm are picked up. `offset` is SPINE_END for every row; the slats meet
+ * the spine at SPREAD, so a strut to one runs at that angle to the arm.
+ */
+export function bladeSpineStations() {
+  return ROWS.map((row) => {
+    const [along, offset] = gapPoint(row.pSpineEnd, row.hi);
+    return { along, offset };
+  });
+}
+
 /** Slats per module: a chevron of two per row per gap. */
 export const MODULE_BLADE_COUNT = C.ARM_COUNT * 2 * C.SLAT_WIDTHS.length;
 
@@ -214,8 +228,10 @@ function rodBetween(p0, p1, r) {
  *   tips are drawn separately (buildTipGeometry).
  * @param omitHub if true, the hub plate, PV face and bolt heads are left out
  *   -- for a module whose hub is drawn separately (buildHubGeometry).
+ * @param omitArms arms whose stem -- face plate, web and PV strip -- to leave
+ *   out, for a module whose arms are drawn separately (buildArmGeometry).
  */
-export function buildModuleStaticGeometry({ omitTips = [], omitHub = false } = {}) {
+export function buildModuleStaticGeometry({ omitTips = [], omitHub = false, omitArms = [] } = {}) {
   const alu = [];
   const pv = [];
 
@@ -231,36 +247,12 @@ export function buildModuleStaticGeometry({ omitTips = [], omitHub = false } = {
   //     level with the slats and as thick, and a narrower web behind it. From
   //     the front it reads as a flat strap; behind, the slat ends that swing in
   //     toward it as they open pass under the face plate, beside the web.
-  const armStart = C.HUB_RADIUS * 0.5 * C.MM;
-  const armEnd = C.ARM_LENGTH * C.MM;
-  const armLen = armEnd - armStart;
-
   for (let i = 0; i < C.ARM_COUNT; i++) {
-    const theta = (i / C.ARM_COUNT) * Math.PI * 2 + ARM_PHASE;
-
-    const face = new THREE.BoxGeometry(armLen, C.ARM_WIDTH * C.MM, C.SLAT_THICKNESS * C.MM);
-    face.translate(armStart + armLen / 2, 0, PLATE_Z * C.MM);
-    face.rotateZ(theta);
-    alu.push(face);
-
-    const webDepth = C.ARM_DEPTH - C.SLAT_THICKNESS;
-    const web = new THREE.BoxGeometry(armLen, C.ARM_WEB_WIDTH * C.MM, webDepth * C.MM);
-    web.translate(armStart + armLen / 2, 0, (webDepth / 2 - C.ARM_DEPTH / 2) * C.MM);
-    web.rotateZ(theta);
-    alu.push(web);
-
-    const strip = new THREE.BoxGeometry(
-      armLen - C.ARM_PV_INSET * 2 * C.MM,
-      (C.ARM_WIDTH - C.ARM_PV_INSET * 2) * C.MM,
-      C.ARM_PV_RISE * C.MM
-    );
-    strip.translate(
-      armStart + armLen / 2,
-      0,
-      (C.ARM_DEPTH / 2 + C.ARM_PV_RISE / 2) * C.MM
-    );
-    strip.rotateZ(theta);
-    pv.push(strip);
+    if (!omitArms.includes(i)) {
+      const { aluminium, pv: strip } = armStem(i);
+      alu.push(...aluminium);
+      pv.push(strip);
+    }
 
     if (!omitTips.includes(i)) {
       const { frame, cell } = tipPanel(i);
@@ -334,6 +326,47 @@ export function tipPanelCentre(i) {
   const r = (C.ARM_LENGTH + C.TIP_PANEL_OFFSET) * C.MM;
   const theta = (i / C.ARM_COUNT) * Math.PI * 2 + ARM_PHASE;
   return new THREE.Vector3(Math.cos(theta) * r, Math.sin(theta) * r, 0);
+}
+
+/**
+ * One arm's stem, module-local metres: the T-section that runs from the hub
+ * out to the tip panel -- a full-width face plate level with the slats and as
+ * thick, a narrower web behind it, and the PV strip set into the face. From
+ * the front it reads as a flat strap; behind, the slat ends that swing in
+ * toward it as they open pass under the face plate, beside the web.
+ */
+function armStem(i) {
+  const theta = (i / C.ARM_COUNT) * Math.PI * 2 + ARM_PHASE;
+  const armStart = C.HUB_RADIUS * 0.5 * C.MM;
+  const armLen = C.ARM_LENGTH * C.MM - armStart;
+
+  const face = new THREE.BoxGeometry(armLen, C.ARM_WIDTH * C.MM, C.SLAT_THICKNESS * C.MM);
+  face.translate(armStart + armLen / 2, 0, PLATE_Z * C.MM);
+  face.rotateZ(theta);
+
+  const webDepth = C.ARM_DEPTH - C.SLAT_THICKNESS;
+  const web = new THREE.BoxGeometry(armLen, C.ARM_WEB_WIDTH * C.MM, webDepth * C.MM);
+  web.translate(armStart + armLen / 2, 0, (webDepth / 2 - C.ARM_DEPTH / 2) * C.MM);
+  web.rotateZ(theta);
+
+  const strip = new THREE.BoxGeometry(
+    armLen - C.ARM_PV_INSET * 2 * C.MM,
+    (C.ARM_WIDTH - C.ARM_PV_INSET * 2) * C.MM,
+    C.ARM_PV_RISE * C.MM
+  );
+  strip.translate(armStart + armLen / 2, 0, (C.ARM_DEPTH / 2 + C.ARM_PV_RISE / 2) * C.MM);
+  strip.rotateZ(theta);
+
+  return { aluminium: [face, web], pv: strip };
+}
+
+/** Just the given arms' stems, split by material like buildModuleStaticGeometry. */
+export function buildArmGeometry(arms) {
+  const parts = arms.map(armStem);
+  return {
+    aluminium: mergeParts(parts.flatMap((p) => p.aluminium)),
+    pv: mergeParts(parts.map((p) => p.pv)),
+  };
 }
 
 /** Arm i's tip panel: a square aluminium frame set diamond-on, and the PV cell in it. */

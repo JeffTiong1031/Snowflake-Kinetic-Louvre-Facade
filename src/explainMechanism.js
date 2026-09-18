@@ -6,16 +6,16 @@
  * High-contrast, solid (non-transparent) engineering models:
  *   - DCL-10 actuator: industrial cobalt casing with brass shaft collar & spec plate
  *   - Drive disc: precision dark gunmetal disc with polished silver rim & orange radial mark
- *   - 6 eccentric pins: bright safety orange pins with brass base, positioned on gap bisectors
+ *   - 6 eccentric pins: bright safety orange pins with brass base, on the arm centre lines
  *   - Orbit circle: solid, vibrant orange guide ring at 65 mm eccentric radius
- *   - 6 transverse slots: mechanical slotted blocks at inner end of each sliding rod
- *   - 6 rod extensions: connecting each slot to the carriage inner end
+ *   - 6 rod assemblies: a connecting link from the drive pin, a riser bracket,
+ *     the rod itself housed inside its supporting arm, and a pair of struts at
+ *     each row out to the blades either side of it
  *   - 8 crank arm overlays: bold orange lever arms with spherical joint caps on focus gap blades
  */
 
 import * as THREE from 'three';
 import * as C from './constants.js';
-import { sliderShift } from './snowflakeModule.js';
 
 const DEG = Math.PI / 180;
 const ARM_PHASE = C.ARM_PHASE_DEG * DEG;
@@ -34,11 +34,12 @@ const HOUSING_STEEL = 0x3d4957;
  *
  * @param {THREE.Group} parent — the stand-in copy group (module-local).
  * @param {THREE.Vector3[]} bisectors — one unit vector per gap, from buildBladeLayout.
- * @param {number} carriageStart — carriage bar's inner end (mm from centre, along bisector).
+ * @param driveStations — from bladeSpineStations(): where each row of blades
+ *   ends at its arm, in the arm's frame (mm), innermost first.
  * @param {number} focusGap — index of the gap featured in close-ups (gap 0).
  * @returns mechanism handle with update and visibility functions.
  */
-export function buildExplainMechanism(parent, bisectors, carriageStart, focusGap = 0) {
+export function buildExplainMechanism(parent, bisectors, driveStations, focusGap = 0) {
   const group = new THREE.Group();
   parent.add(group);
 
@@ -79,6 +80,30 @@ export function buildExplainMechanism(parent, bisectors, carriageStart, focusGap
   const orangeHighlightMat = new THREE.MeshBasicMaterial({
     color: ORANGE,
     toneMapped: false,
+  });
+  // A highlighted rod draws through the arm that houses it, the way a cutaway
+  // shows a part running inside a section.
+  const xrayMat = new THREE.MeshBasicMaterial({
+    color: ORANGE,
+    transparent: true,
+    opacity: 0.95,
+    depthTest: false,
+    depthWrite: false,
+    toneMapped: false,
+    fog: false,
+  });
+  // The same, in the rod's own steel, for the steps that fade the arms to show
+  // what runs inside them: three faded surfaces would otherwise wash it out.
+  // Transparent (at full opacity) so it is drawn in the same pass as the faded
+  // arms and, by renderOrder, after them -- an opaque mesh would be painted over.
+  const xraySteelMat = new THREE.MeshBasicMaterial({
+    color: HOUSING_STEEL,
+    transparent: true,
+    opacity: 1,
+    toneMapped: false,
+    depthTest: false,
+    depthWrite: false,
+    fog: false,
   });
   const steelMat = new THREE.MeshStandardMaterial({
     color: HOUSING_STEEL,
@@ -175,20 +200,20 @@ export function buildExplainMechanism(parent, bisectors, carriageStart, focusGap
 
   const discLabel = new THREE.Vector3(discR * 0.7, discR * 0.7, discZ);
 
-  /* ---- 6 eccentric pins on the disc (Aligned on GAP BISECTOR angles) ---- */
+  /* ---- 6 eccentric pins on the disc (aligned on the ARM centre lines) ---- */
   const pinEccentricR = 65 * C.MM;
   const pinDotR = 6 * C.MM;
   const pinHeight = 12 * C.MM;
   const pins = [];
 
   for (let i = 0; i < 6; i++) {
-    // Gap bisector angle: matches the centre lines of the 6 regions!
-    const bisAngle = (i / 6) * Math.PI * 2 + ARM_PHASE + Math.PI / 6;
+    // Arm angle: each pin drives the rod housed in that supporting arm.
+    const armAngle = (i / 6) * Math.PI * 2 + ARM_PHASE;
 
     const pinGroup = new THREE.Group();
     pinGroup.position.set(
-      Math.cos(bisAngle) * pinEccentricR,
-      Math.sin(bisAngle) * pinEccentricR,
+      Math.cos(armAngle) * pinEccentricR,
+      Math.sin(armAngle) * pinEccentricR,
       discThick / 2 + pinHeight / 2
     );
 
@@ -223,69 +248,118 @@ export function buildExplainMechanism(parent, bisectors, carriageStart, focusGap
   orbitRing.visible = false;
   group.add(orbitRing);
 
-  /* ---- 6 transverse slots at the inner end of each sliding rod ---- */
-  const slotW = 32 * C.MM; // transverse width (allows pin to slide sideways)
-  const slotH = 10 * C.MM; // along the rod
-  const slotD = 10 * C.MM; // depth
-  const slotR = pinEccentricR;
-  const slotHandles = [];
+  /* ---- Rod assemblies: link, riser, rod and struts, one per supporting arm ---- */
+  //
+  // Each rod is housed in a supporting arm, running along the arm's centre line
+  // against the back of its web -- where a drive rod would really sit -- rather
+  // than out in front of the blades. A connecting link joins its inner end to
+  // the drive pin, and a riser bracket carries that end forward to the pin's
+  // plane. Turning the disc swings the link, which pulls the rod along its arm:
+  // a slider-crank, the pin its crank and the rod its slider.
+  //
+  // Housed means hidden: seen from the front the arm covers its rod completely.
+  // The steps that are about the rod highlight it, and a highlighted rod draws
+  // through the arm (xrayMat), the way a cutaway shows a part inside a section.
+  const linkZ = discZ + discThick / 2 + pinHeight / 2; // the pin's own plane
+  // Long enough that at full travel it stays well off lining up with the arm,
+  // where a slider-crank stops pulling cleanly.
+  const linkLen = 110 * C.MM;
+  const linkW = 9 * C.MM;
+  const linkD = 8 * C.MM;
+  const pivotR = 7 * C.MM;
+  /** Where the rod's inner end sits with the disc at rest. */
+  const restEnd = pinEccentricR + linkLen;
+
+  // Well inside the arm's web (64 mm), and clear of the slat ends, which stop
+  // SLAT_SPINE_GAP off the arm's side and swing back in the pockets beside it.
+  const rodW = 10 * C.MM;
+  const rodH = 7 * C.MM;
+  /** Tucked against the back of the arm's web. */
+  const rodZ = -(C.ARM_DEPTH / 2) * C.MM - rodH / 2;
+  const riserW = 10 * C.MM; // along the rod
+  // Pick-up struts: from one point on the rod, a pair splaying out to the two
+  // blades that end there -- one each side of the arm. They follow the blades
+  // themselves, which meet their spine at SPREAD, so each pair makes a V.
+  const STRUT_SPREAD = 60 * DEG;
+  const strutW = 7 * C.MM;
+  const strutH = 6 * C.MM;
+  /** The arm along the leading side of the focus gap: the one close-ups face. */
+  const focusArm = (focusGap + 1) % 6;
+
+  const rods = [];
 
   for (let i = 0; i < 6; i++) {
-    const bisAngle = (i / 6) * Math.PI * 2 + ARM_PHASE + Math.PI / 6;
-    const isFocus = i === focusGap;
+    const armAngle = (i / 6) * Math.PI * 2 + ARM_PHASE;
+    const isFocus = i === focusArm;
+    const material = isFocus ? orangeSolidMat : steelMat;
+    const cos = Math.cos(armAngle);
+    const sin = Math.sin(armAngle);
 
-    // Slot housing block
-    const slotMesh = new THREE.Mesh(
-      new THREE.BoxGeometry(slotW, slotH, slotD),
-      isFocus ? orangeSolidMat : steelMat
+    // Everything but the link slides along the arm together.
+    const assembly = new THREE.Group();
+    group.add(assembly);
+
+    // The connecting link, pinned to the drive pin at one end and to the rod at
+    // the other. It swings rather than slides, so tick() places it itself.
+    const link = new THREE.Mesh(new THREE.BoxGeometry(linkLen, linkW, linkD), material);
+    group.add(link);
+
+    // The pivot the link takes hold of, at the rod's inner end.
+    const pivotGeo = new THREE.CylinderGeometry(pivotR, pivotR, linkD + 6 * C.MM, 16);
+    pivotGeo.rotateX(Math.PI / 2);
+    const pivot = new THREE.Mesh(pivotGeo, material);
+    pivot.position.set(cos * restEnd, sin * restEnd, linkZ);
+    assembly.add(pivot);
+
+    // The rod itself: out past the last blade it drives, so it runs the full
+    // length of the blades either side of its arm.
+    const outerR =
+      (driveStations[driveStations.length - 1].along + C.SLIDER_LENGTH) * C.MM;
+    const midR = (restEnd + outerR) / 2;
+    const rodMesh = new THREE.Mesh(new THREE.BoxGeometry(outerR - restEnd, rodW, rodH), material);
+    rodMesh.position.set(cos * midR, sin * midR, rodZ);
+    rodMesh.rotation.z = armAngle;
+    assembly.add(rodMesh);
+
+    // Riser bracket: carries the rod forward from the arm to the pivot.
+    const riserTop = linkZ + linkD / 2;
+    const riserBottom = rodZ - rodH / 2;
+    const riserMesh = new THREE.Mesh(
+      new THREE.BoxGeometry(riserW, rodW, riserTop - riserBottom),
+      material
     );
-    slotMesh.position.set(
-      Math.cos(bisAngle) * slotR,
-      Math.sin(bisAngle) * slotR,
-      discZ + discThick / 2 + pinHeight / 2
-    );
-    // Rotate so width is perpendicular to bisector (transverse)
-    slotMesh.rotation.z = bisAngle;
-    group.add(slotMesh);
+    riserMesh.position.set(cos * restEnd, sin * restEnd, (riserTop + riserBottom) / 2);
+    riserMesh.rotation.z = armAngle;
+    assembly.add(riserMesh);
 
-    slotHandles.push({
-      mesh: slotMesh,
-      angle: bisAngle,
-      isFocus,
-    });
-  }
+    // At each station a pair of struts out to the two blades that end there:
+    // what makes one rod move all eight of them.
+    const pickups = [];
+    for (const { along, offset } of driveStations) {
+      // The strut leaves the rod inboard of the blade end, so that it runs out
+      // at the blade's own angle and meets it at its end.
+      const root = (along - offset / Math.tan(STRUT_SPREAD)) * C.MM;
+      const len = (offset / Math.sin(STRUT_SPREAD)) * C.MM;
+      for (const side of [1, -1]) {
+        const strutAngle = armAngle + side * STRUT_SPREAD;
+        const strut = new THREE.Mesh(new THREE.BoxGeometry(len, strutW, strutH), material);
+        strut.position.set(
+          cos * root + Math.cos(strutAngle) * (len / 2),
+          sin * root + Math.sin(strutAngle) * (len / 2),
+          rodZ
+        );
+        strut.rotation.z = strutAngle;
+        assembly.add(strut);
+        pickups.push(strut);
+      }
+    }
 
-  /* ---- Rod extensions: from each slot out to the carriage inner end ---- */
-  const rodExtW = 7 * C.MM;
-  const rodExtH = 7 * C.MM;
-  const rodExtensions = [];
-
-  for (let i = 0; i < 6; i++) {
-    const bisAngle = (i / 6) * Math.PI * 2 + ARM_PHASE + Math.PI / 6;
-    const isFocus = i === focusGap;
-    const innerR = slotR + slotH / 2;
-    const outerR = carriageStart * C.MM;
-    const len = outerR - innerR;
-    const midR = (innerR + outerR) / 2;
-
-    const extMesh = new THREE.Mesh(
-      new THREE.BoxGeometry(len, rodExtW, rodExtH),
-      isFocus ? orangeSolidMat : steelMat
-    );
-    extMesh.position.set(
-      Math.cos(bisAngle) * midR,
-      Math.sin(bisAngle) * midR,
-      discZ + discThick / 2 + pinHeight / 2
-    );
-    extMesh.rotation.z = bisAngle;
-    group.add(extMesh);
-
-    rodExtensions.push({
-      mesh: extMesh,
-      angle: bisAngle,
-      innerR,
-      restLen: len,
-      restMidR: midR,
+    rods.push({
+      assembly,
+      link,
+      angle: armAngle,
+      dir: new THREE.Vector2(cos, sin),
+      parts: [link, pivot, rodMesh, riserMesh, ...pickups],
       isFocus,
     });
   }
@@ -329,36 +403,29 @@ export function buildExplainMechanism(parent, bisectors, carriageStart, focusGap
   }
 
   /* ---- Pose the mechanism at a given blade angle theta (degrees, 0–45) ---- */
-  const restShift = sliderShift(90 * DEG); // carriage shift at 0° blade angle (phi = 90°)
-
   function tick(theta) {
     const rad = theta * DEG;
     // Actuator disc turns about façade normal Z
     discGroup.rotation.z = -rad;
 
-    // Shift of sliding rod: inward displacement matching the carriage in facade.js
-    const phi = (90 - theta) * DEG;
-    const currentShift = sliderShift(phi);
-    const deltaShift = currentShift - restShift; // 0 mm at theta=0, -4.41 mm at theta=45
+    // Slider-crank: the pin swings round on its 65 mm radius and the link, whose
+    // length never changes, drags each rod in along its arm -- about 29 mm at
+    // 45°, the sideways part of the pin's travel taken up by the link swinging.
+    const sideways = pinEccentricR * Math.sin(rad);
+    const rodEnd = pinEccentricR * Math.cos(rad) + Math.sqrt(linkLen ** 2 - sideways ** 2);
+    const deltaShift = rodEnd - restEnd;
 
-    // Rod extensions slide radially in lockstep with the carriages
-    for (const ext of rodExtensions) {
-      const newMidR = ext.restMidR + deltaShift;
-      ext.mesh.position.set(
-        Math.cos(ext.angle) * newMidR,
-        Math.sin(ext.angle) * newMidR,
-        ext.mesh.position.z
-      );
-    }
+    for (const rod of rods) {
+      rod.assembly.position.set(rod.dir.x * deltaShift, rod.dir.y * deltaShift, 0);
 
-    // Transverse slots slide radially with the rods
-    for (const slot of slotHandles) {
-      const newR = slotR + deltaShift;
-      slot.mesh.position.set(
-        Math.cos(slot.angle) * newR,
-        Math.sin(slot.angle) * newR,
-        slot.mesh.position.z
-      );
+      // The link spans pin to pivot: put it on that line, turned to match.
+      const pinAngle = rod.angle - rad;
+      const px = Math.cos(pinAngle) * pinEccentricR;
+      const py = Math.sin(pinAngle) * pinEccentricR;
+      const ex = rod.dir.x * rodEnd;
+      const ey = rod.dir.y * rodEnd;
+      rod.link.position.set((px + ex) / 2, (py + ey) / 2, linkZ);
+      rod.link.rotation.z = Math.atan2(ey - py, ex - px);
     }
   }
 
@@ -370,13 +437,33 @@ export function buildExplainMechanism(parent, bisectors, carriageStart, focusGap
     orbitRing.visible = vis;
   }
 
+  /**
+   * Rod finish, from the two things a step can ask for: the focus rod picked
+   * out in orange, and the rods drawn through the arms that house them.
+   */
+  let highlightOn = false;
+  let seeThroughOn = false;
+
+  function applyRodMaterials() {
+    for (const rod of rods) {
+      const highlight = highlightOn && rod.isFocus;
+      const through = highlight || seeThroughOn;
+      for (const part of rod.parts) {
+        part.material = highlight ? xrayMat : seeThroughOn ? xraySteelMat : steelMat;
+        part.renderOrder = through ? 5 : 0;
+      }
+    }
+  }
+
   function setFocusHighlight(highlight) {
-    for (const ext of rodExtensions) {
-      if (ext.isFocus) ext.mesh.material = highlight ? orangeHighlightMat : steelMat;
-    }
-    for (const slot of slotHandles) {
-      if (slot.isFocus) slot.mesh.material = highlight ? orangeHighlightMat : steelMat;
-    }
+    highlightOn = highlight;
+    applyRodMaterials();
+  }
+
+  /** Draw the rods through the arms, for the steps that fade the arms. */
+  function setSeeThrough(on) {
+    seeThroughOn = on;
+    applyRodMaterials();
   }
 
   // Initialise at 0°
@@ -388,6 +475,7 @@ export function buildExplainMechanism(parent, bisectors, carriageStart, focusGap
     setVisible,
     showOrbits,
     setFocusHighlight,
+    setSeeThrough,
     buildCrankArms,
     actuatorLabel,
     discLabel,

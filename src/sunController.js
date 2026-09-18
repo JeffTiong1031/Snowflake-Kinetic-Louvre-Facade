@@ -20,6 +20,7 @@
 import * as THREE from 'three';
 import * as C from './constants.js';
 import { gapOpenAngles } from './louvreControl.js';
+import { createFacadeExposure } from './facadeExposure.js';
 // Inlined into the bundle, so the worker costs no extra fetch.
 import LouvreWorker from './louvreWorker.js?worker&inline';
 
@@ -80,6 +81,7 @@ export function createSunController({
   ambientLight,
   facade,
   sky,
+  city,
 }) {
   const gaps = C.ARM_COUNT;
   /** One state per gap of each module, module by module: 0 = closed, 1 = open. */
@@ -99,6 +101,13 @@ export function createSunController({
   /** The sun in module-local terms: +X along the facade, +Y up, +Z out of it. */
   const sunLocal = new THREE.Vector3();
   const toModule = facade.faceQuat.clone().invert();
+
+  /** How much sun each module gets, so the field closes in bands, not as one. */
+  const exposure = createFacadeExposure({
+    modulePos: facade.modulePos,
+    normal: facade.facadeNormal,
+    footprints: city.footprints,
+  });
 
   const hemiColor = new THREE.Color();
 
@@ -321,28 +330,51 @@ export function createSunController({
   const NOON_ELEVATION_DEG = 69.7;
 
   /**
-   * Modulates the louvre opening based on sunlight intensity hitting the facade.
-   * In early morning (low intensity), the louvres close slightly; at solar noon
-   * (peak intensity), they close down to a small gap opening (C.LOUVRE_MIN_GAP_OPENING);
-   * as the sun descends toward evening (from 12 to 7 or 8 PM), they gradually open back up.
-   * All six gaps of each module share this single unified target.
+   * How far to close, module by module.
+   *
+   * How high the sun is says how hard it is bearing down: at the horizon the
+   * louvres stand open, and by solar noon they are down to
+   * LOUVRE_MIN_GAP_OPENING. How much of that sun each module actually gets --
+   * beam or shadow, and what bounces in off the plaza and the neighbours --
+   * says how much of that closing it does. A module in a neighbour's shadow
+   * opens up again while the ones either side of the shadow stay shut, and
+   * the whole pattern moves with the sun.
    */
   function computeTargets(params) {
     sunLocal.copy(sunDir).applyQuaternion(toModule);
 
-    let sharedTarget = 1.0;
-    if (params.elevation > 0 && sunLocal.z > 0) {
-      const elRad = params.elevation * DEG;
-      // Normalized sunlight intensity: 0 at horizon, 1.0 at peak solar noon.
-      const intensity = clamp01(Math.sin(elRad) / Math.sin(NOON_ELEVATION_DEG * DEG));
-      const minOpening = C.LOUVRE_MIN_GAP_OPENING ?? 0.10;
-      sharedTarget = 1.0 - (1.0 - minOpening) * Math.pow(intensity, 1.25);
+    if (params.elevation <= 0 || sunLocal.z <= 0) {
+      targets.fill(1);
+      gapTargets.fill(1);
+      return;
     }
 
-    const sharedAngle = closedAngle + sharedTarget * travel;
-    gapAngles.fill(sharedAngle);
-    gapTargets.fill(sharedTarget);
-    targets.fill(sharedTarget);
+    const elRad = params.elevation * DEG;
+    // Normalized sunlight intensity: 0 at horizon, 1.0 at peak solar noon.
+    const intensity = clamp01(Math.sin(elRad) / Math.sin(NOON_ELEVATION_DEG * DEG));
+    const minOpening = C.LOUVRE_MIN_GAP_OPENING ?? 0.10;
+    const press = Math.pow(intensity, 1.25);
+
+    // Each module's share of the sun, against the field's average: 1 for a
+    // module getting what the field gets, more for one in the brightest part,
+    // less for one in shadow. It scales how hard the sun presses on that
+    // module, so the average still closes exactly as far as the sun's height
+    // says, while the field spreads either side of it.
+    const share = exposure.update(sunDir, params.elevation);
+    let sum = 0;
+    for (let m = 0; m < C.MODULE_COUNT; m++) sum += share[m];
+    const scale = sum > 1e-3 ? C.MODULE_COUNT / sum : 0;
+
+    let mean = 0;
+    for (let m = 0; m < C.MODULE_COUNT; m++) {
+      const target = 1.0 - (1.0 - minOpening) * clamp01(press * share[m] * scale);
+      mean += target;
+      const first = m * gaps;
+      for (let g = 0; g < gaps; g++) targets[first + g] = target;
+    }
+
+    // The explanation and the readouts want one number for the whole field.
+    gapTargets.fill(mean / C.MODULE_COUNT);
   }
 
   /* -------------------------------------------------------------- *

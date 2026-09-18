@@ -6,7 +6,7 @@
  * Only four diagrams remain (the 3D model is the primary visual now):
  *   controller  – the angle-ranges table (step 2)
  *   command     – signal interface + DCL-10 specs (step 3)
- *   slot        – pin sliding across the transverse slot (step 6)
+ *   link        – drive pin, connecting link and rod (step 6)
  *   calc        – crank formula with live numbers (step 7)
  */
 
@@ -19,6 +19,8 @@ const MONO = 'ui-monospace, SFMono-Regular, Consolas, monospace';
 
 const BLUE = '#1F4E79';
 const ORANGE = '#F0932B';
+/** Orange is too pale for text on white: labels use this darker shade of it. */
+const ORANGE_TEXT = '#A85F08';
 const FILL = '#DCE9F5';
 const GREY = '#9AA5B1';
 const INK = '#3A4450';
@@ -89,7 +91,7 @@ function controllerDiagram(g) {
   svg('rect', { x: -10, y: tableY, width: tableW, height: 32, rx: 8, fill: FILL }, g);
   svg('rect', { x: -10, y: tableY + 24, width: tableW, height: 8, fill: FILL }, g);
   label(g, 90, tableY + 22, 'Sunlight level', { 'font-weight': 700, 'font-size': 13, fill: BLUE });
-  label(g, 290, tableY + 22, 'Target angle', { 'font-weight': 700, 'font-size': 13, fill: BLUE });
+  label(g, 350, tableY + 22, 'Target angle', { 'text-anchor': 'end', 'font-weight': 700, 'font-size': 13, fill: BLUE });
 
   // Rows
   const rows = [
@@ -102,7 +104,7 @@ function controllerDiagram(g) {
     const ry = tableY + 38 + i * 36;
     if (i < 3) svg('line', { x1: 0, y1: ry - 4, x2: tableW - 20, y2: ry - 4, stroke: '#EEF2F6', 'stroke-width': 1 }, g);
     label(g, 20, ry + 14, row[0], { 'font-size': 14, fill: INK });
-    label(g, 290, ry + 14, row[1], { 'font-size': 14, 'font-weight': 700, fill: ORANGE });
+    label(g, 350, ry + 14, row[1], { 'text-anchor': 'end', 'font-size': 14, 'font-weight': 700, fill: ORANGE_TEXT });
     const highlight = svg('rect', {
       x: -6, y: ry - 2, width: tableW - 8, height: 32, rx: 6,
       fill: ORANGE, 'fill-opacity': 0, stroke: ORANGE, 'stroke-width': 0,
@@ -116,7 +118,7 @@ function controllerDiagram(g) {
   label(g, -6, noteY + 16, 'between current and required angle exceeds a threshold.', { 'font-size': 12, fill: GREY });
 
   return {
-    viewBox: [-120, 10, 500, 380],
+    viewBox: [-170, 10, 560, 380],
     rest: 3,
     tick(t) {
       flows.forEach((flow, i) => {
@@ -157,9 +159,9 @@ function commandDiagram(g) {
     opacity: 0,
   }, g);
   label(g, (ctrlX + 180 + actX) / 2, cmdY - 14, 'Position command', {
-    'text-anchor': 'middle', 'font-weight': 700, 'font-size': 13, fill: ORANGE,
+    'text-anchor': 'middle', 'font-weight': 700, 'font-size': 13, fill: ORANGE_TEXT,
   });
-  label(g, (ctrlX + 180 + actX) / 2, cmdY + 24, 'Signal: 0–10 V, 4–20 mA, or RS485/Modbus', {
+  label(g, (ctrlX + 180 + actX) / 2, ctrlY + 93, 'Signal: 0–10 V, 4–20 mA, or RS485/Modbus', {
     'text-anchor': 'middle', 'font-size': 11, fill: GREY,
   });
 
@@ -195,88 +197,123 @@ function commandDiagram(g) {
 }
 
 /* ================================================================== *
- * Pin-in-slot detail (step 6)
+ * Drive pin, connecting link and rod (step 6)
  * ================================================================== */
 
-function slotDiagram(g) {
-  const cx = 300;
+function linkDiagram(g) {
+  const discX = 190;
   const cy = 220;
+  /** The pin's 65 mm eccentric radius and the 110 mm link, to one scale. */
+  const orbit = 55;
+  const perMm = orbit / 65;
+  const linkLen = 110 * perMm;
+  /** The channel, and with it the rod, end here. */
+  const channelEnd = 600;
 
-  // Guide channel
-  svg('rect', { x: 80, y: cy - 18, width: 500, height: 36, rx: 6, fill: '#EEF2F6', stroke: '#D9DEE4', 'stroke-width': 1.5 }, g);
-  label(g, 330, cy - 30, 'Guide channel along centre line of region', { 'text-anchor': 'middle', 'font-size': 12, fill: GREY });
+  // The guide channel, and the rod sliding in it
+  svg('rect', {
+    x: 300, y: cy - 19, width: channelEnd - 300, height: 38, rx: 6,
+    fill: '#EEF2F6', stroke: '#D9DEE4', 'stroke-width': 1.5,
+  }, g);
+  label(g, 455, cy + 46, 'Guide channel inside the supporting arm', {
+    'text-anchor': 'middle', 'font-size': 12, fill: GREY,
+  });
 
-  // Rod
-  const rodW = 340;
-  const rod = svg('rect', { x: 100, y: cy - 10, width: rodW, height: 20, rx: 4, fill: FILL, stroke: BLUE, 'stroke-width': 2 }, g);
+  const rod = svg('rect', {
+    x: discX + orbit + linkLen, y: cy - 10, width: 10, height: 20, rx: 4,
+    fill: FILL, stroke: BLUE, 'stroke-width': 2,
+  }, g);
+  label(g, 545, cy - 32, 'Sliding rod', {
+    'text-anchor': 'middle', 'font-weight': 700, 'font-size': 12, fill: BLUE,
+  });
 
-  // Transverse slot
-  const slotX = 120;
-  const slotH = 50;
-  const slotGroup = svg('g', {}, g);
-  svg('rect', { x: slotX - 5, y: cy - slotH / 2, width: 10, height: slotH, rx: 3, fill: '#fff', stroke: BLUE, 'stroke-width': 1.5 }, slotGroup);
-  label(g, slotX, cy - slotH / 2 - 10, 'Transverse slot', { 'text-anchor': 'middle', 'font-weight': 700, 'font-size': 12, fill: BLUE });
+  // The disc, and the circle its pin runs on
+  svg('circle', { cx: discX, cy, r: orbit + 18, fill: '#fff', stroke: '#D9DEE4', 'stroke-width': 1.5 }, g);
+  svg('circle', {
+    cx: discX, cy, r: orbit,
+    fill: 'none', stroke: BLUE, 'stroke-width': 1.5, 'stroke-dasharray': '5 5',
+  }, g);
+  svg('circle', { cx: discX, cy, r: 6, fill: BLUE }, g);
+  label(g, discX, cy + orbit + 46, 'Drive disc — pin at 65 mm', {
+    'text-anchor': 'middle', 'font-size': 12, 'font-weight': 600, fill: BLUE,
+  });
 
-  // Pin
-  const pinEccentric = 50;
-  const pin = svg('circle', { cx: slotX, cy, r: 8, fill: ORANGE, stroke: '#fff', 'stroke-width': 2 }, g);
-
-  // Component arrows
-  const radialArrow = svg('line', {
+  // Crank, link and the two joints
+  const crank = svg('line', {
+    x1: discX, y1: cy, x2: 0, y2: 0,
+    stroke: BLUE, 'stroke-width': 2, 'stroke-dasharray': '4 3',
+  }, g);
+  const link = svg('line', {
     x1: 0, y1: 0, x2: 0, y2: 0,
+    stroke: ORANGE, 'stroke-width': 7, 'stroke-linecap': 'round',
+  }, g);
+  const pin = svg('circle', { cx: 0, cy: 0, r: 8, fill: ORANGE, stroke: '#fff', 'stroke-width': 2 }, g);
+  const pivot = svg('circle', { cx: 0, cy: 0, r: 7, fill: '#fff', stroke: BLUE, 'stroke-width': 2.5 }, g);
+
+  const pinLabel = label(g, 0, 0, 'Drive pin', {
+    'text-anchor': 'middle', 'font-weight': 700, 'font-size': 12, fill: ORANGE_TEXT,
+  });
+  const linkLabel = label(g, 0, 0, 'Connecting link', {
+    'text-anchor': 'middle', 'font-weight': 700, 'font-size': 12, fill: ORANGE_TEXT,
+  });
+
+  // How far the rod has been pulled in
+  const pullArrow = svg('line', {
+    x1: 0, y1: cy - 54, x2: 0, y2: cy - 54,
     stroke: ORANGE, 'stroke-width': 3,
     'marker-end': 'url(#arrow-orange)',
     opacity: 0,
   }, g);
-  const radialLabel = label(g, 0, 0, 'Radial → pushes rod', { 'font-weight': 700, 'font-size': 12, fill: ORANGE, opacity: 0 });
+  const pullLabel = label(g, 0, cy - 50, '', {
+    'font-weight': 700, 'font-size': 12, fill: ORANGE_TEXT, opacity: 0,
+  });
 
-  const sideArrow = svg('line', {
-    x1: 0, y1: 0, x2: 0, y2: 0,
-    stroke: BLUE, 'stroke-width': 2.5,
-    'stroke-dasharray': '6 4',
-    opacity: 0,
-  }, g);
-  const sideLabel = label(g, 0, 0, '↕ Sideways → absorbed by slot', { 'font-weight': 600, 'font-size': 12, fill: BLUE, opacity: 0 });
-
-  label(g, cx, 380, 'Disc rotation → pin circular movement → guided rod linear movement', {
+  label(g, 355, 350, 'Disc rotation → pin swings round → link pulls the rod along its arm', {
     'text-anchor': 'middle', 'font-size': 13, 'font-weight': 700, fill: INK,
   });
 
   const CYCLE = { to: 45, up: 3.0, hold: 1.0, down: 2.5, rest: 1.0 };
+  const restEnd = discX + orbit + linkLen;
 
   return {
-    viewBox: [20, 80, 600, 340],
+    viewBox: [95, 130, 520, 250],
     rest: 2,
     tick(t) {
       const [theta] = tiltCycle(t, CYCLE);
       const rad = theta * DEG;
 
-      const slide = pinEccentric * Math.sin(rad) / Math.sin(45 * DEG);
-      const sideOffset = pinEccentric * (1 - Math.cos(rad)) * 0.4;
+      // The pin on its circle, and the rod end the fixed-length link reaches.
+      const px = discX + orbit * Math.cos(rad);
+      const py = cy - orbit * Math.sin(rad);
+      const ex = px + Math.sqrt(linkLen * linkLen - (cy - py) ** 2);
 
-      rod.setAttribute('x', 100 + slide * 0.8);
-      slotGroup.setAttribute('transform', `translate(${slide * 0.8} 0)`);
-      pin.setAttribute('cx', slotX + slide * 0.8);
-      pin.setAttribute('cy', cy + sideOffset - sideOffset * 0.5);
+      crank.setAttribute('x2', px);
+      crank.setAttribute('y2', py);
+      link.setAttribute('x1', px);
+      link.setAttribute('y1', py);
+      link.setAttribute('x2', ex);
+      link.setAttribute('y2', cy);
+      pin.setAttribute('cx', px);
+      pin.setAttribute('cy', py);
+      pivot.setAttribute('cx', ex);
+      pivot.setAttribute('cy', cy);
+      rod.setAttribute('x', ex);
+      rod.setAttribute('width', channelEnd - ex);
 
-      const showArrows = ease((t - 0.8) / 0.5);
-      radialArrow.setAttribute('opacity', showArrows);
-      radialArrow.setAttribute('x1', slotX + slide * 0.8 + 20);
-      radialArrow.setAttribute('y1', cy);
-      radialArrow.setAttribute('x2', slotX + slide * 0.8 + 65);
-      radialArrow.setAttribute('y2', cy);
-      radialLabel.setAttribute('opacity', showArrows);
-      radialLabel.setAttribute('x', slotX + slide * 0.8 + 70);
-      radialLabel.setAttribute('y', cy + 5);
+      pinLabel.setAttribute('x', px);
+      pinLabel.setAttribute('y', py - 24);
+      linkLabel.setAttribute('x', (px + ex) / 2);
+      linkLabel.setAttribute('y', (py + cy) / 2 + 34);
 
-      sideArrow.setAttribute('opacity', showArrows * 0.8);
-      sideArrow.setAttribute('x1', slotX + slide * 0.8);
-      sideArrow.setAttribute('y1', cy + 14);
-      sideArrow.setAttribute('x2', slotX + slide * 0.8);
-      sideArrow.setAttribute('y2', cy + 50);
-      sideLabel.setAttribute('opacity', showArrows);
-      sideLabel.setAttribute('x', slotX + slide * 0.8 + 14);
-      sideLabel.setAttribute('y', cy + 68);
+      // The pull, once there is one worth showing.
+      const pulled = restEnd - ex;
+      const show = ease((pulled - 3) / 10);
+      pullArrow.setAttribute('opacity', show);
+      pullArrow.setAttribute('x1', restEnd);
+      pullArrow.setAttribute('x2', ex + 4);
+      pullLabel.setAttribute('opacity', show);
+      pullLabel.setAttribute('x', restEnd + 14);
+      pullLabel.textContent = `rod pulled in ${Math.round(pulled / perMm)} mm`;
     },
   };
 }
@@ -312,18 +349,18 @@ function calcDiagram(g) {
 
   const arcR = 50;
   const angleArc = svg('path', { d: '', fill: ORANGE, 'fill-opacity': 0.12, stroke: ORANGE, 'stroke-width': 2 }, g);
-  const angleText = label(g, 0, 0, '', { 'font-weight': 800, 'font-size': 20, fill: ORANGE });
+  const angleText = label(g, 0, 0, '', { 'font-weight': 800, 'font-size': 20, fill: ORANGE_TEXT });
 
   label(g, 60, 380, 'Crank formula:', { 'font-weight': 700, 'font-size': 14, fill: BLUE });
   label(g, 60, 405, 's = 2a·sin(θ/2)', { 'font-family': MONO, 'font-size': 16, fill: INK });
   label(g, 60, 430, 'a = 60 mm (crank arm)', { 'font-size': 13, fill: INK });
-  const sValue = label(g, 60, 455, 's = 0 mm', { 'font-weight': 800, 'font-size': 18, fill: ORANGE });
+  const sValue = label(g, 60, 455, 's = 0 mm', { 'font-weight': 800, 'font-size': 18, fill: ORANGE_TEXT });
 
   const pinCheck = svg('g', { opacity: 0 }, g);
   svg('rect', { x: 310, y: 360, width: 290, height: 120, rx: 10, fill: '#fff', stroke: '#D9DEE4', 'stroke-width': 1.5 }, pinCheck);
   label(pinCheck, 325, 388, 'Pin radius check:', { 'font-weight': 700, 'font-size': 13, fill: BLUE });
   label(pinCheck, 325, 410, 's = r·sin 45° = 65 × 0.707', { 'font-family': MONO, 'font-size': 13, fill: INK });
-  label(pinCheck, 325, 430, '= 45.96 mm ✓', { 'font-family': MONO, 'font-size': 13, 'font-weight': 700, fill: ORANGE });
+  label(pinCheck, 325, 430, '= 45.96 mm ✓', { 'font-family': MONO, 'font-size': 13, 'font-weight': 700, fill: ORANGE_TEXT });
 
   const designVals = svg('g', { opacity: 0 }, g);
   label(designVals, 325, 460, 'Design values:', { 'font-weight': 700, 'font-size': 12, fill: BLUE });
@@ -396,7 +433,7 @@ export function buildControlDiagrams(root) {
   for (const [name, build] of Object.entries({
     controller: controllerDiagram,
     command: commandDiagram,
-    slot: slotDiagram,
+    link: linkDiagram,
     calc: calcDiagram,
   })) {
     const g = svg('g', {}, defs);

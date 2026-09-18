@@ -393,6 +393,44 @@ export const SUN_LEAK_BUDGET = 0.05;
 /** Smallest gap opening fraction (0..1) at peak solar noon (leaving a small slit opening). */
 export const LOUVRE_MIN_GAP_OPENING = 0.10;
 
+/**
+ * How much sun a module gets, split between the beam and bounced light
+ * (facadeExposure.js). The beam is the same for every module on a flat wall,
+ * so on its own it would close the whole field as one; what sets modules apart
+ * is whether a neighbour stands in the way of the beam, and how much bounced
+ * light each can see. These shares decide how far apart they end up.
+ */
+export const EXPOSURE_DIRECT_SHARE = 0.3;
+/** Off the sunlit plaza, and the height over which a module loses sight of it (m). */
+export const EXPOSURE_PLAZA = 0.18;
+export const EXPOSURE_PLAZA_HEIGHT = 46;
+/** Off the neighbours' sunlit faces, how far that carries, and its reach (m). */
+export const EXPOSURE_NEIGHBOUR = 0.62;
+export const EXPOSURE_NEIGHBOUR_RANGE = 130;
+export const EXPOSURE_NEIGHBOUR_FALLOFF = 38;
+/** Softens the sum over neighbours, so several in view do not all pin at 1. */
+export const EXPOSURE_NEIGHBOUR_SOFT = 1.6;
+
+/**
+ * How plainly the field shows its differences. A flat wall meets the beam at
+ * the same angle everywhere, so the real spread between modules is only a few
+ * per cent -- too little to see. This stretches that spread about its own
+ * average: the pattern and the way it moves with the sun are the geometry's,
+ * the amplitude is this. 1 leaves the field as physics has it.
+ */
+export const EXPOSURE_CONTRAST = 8;
+
+/**
+ * How strongly the field leans toward the end of the facade the sun is on.
+ *
+ * Unlike the rest of the exposure, this one is not measured: a flat wall takes
+ * the beam at the same angle along its whole length, so nothing physical makes
+ * one end hotter than the other. It is here because the facade reads as a
+ * kinetic thing when the pattern travels with the sun, and it reverses as the
+ * sun crosses from one side to the other. 0 leaves the field to the geometry.
+ */
+export const EXPOSURE_SUN_SWEEP = 0.09;
+
 /** Seconds for a gap to close most of the way to its new angle (damping). */
 export const BLADE_RESPONSE_TAU = 0.55;
 

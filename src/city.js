@@ -128,6 +128,8 @@ export function buildCity(scene) {
   return {
     isBlocked,
     isBuilding,
+    /** Every building as { x, z, w, d, h } (m): what stands in the sun's way. */
+    footprints,
     updateCars: cars.update,
     buildingCount: footprints.length,
     /** 0 = day, 1 = night: the lit windows and the shops glow. */

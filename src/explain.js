@@ -23,6 +23,8 @@ import {
   buildModuleStaticGeometry,
   buildTipGeometry,
   buildHubGeometry,
+  buildArmGeometry,
+  bladeSpineStations,
   slatOutlines,
   tipPanelCentre,
   MODULE_BLADE_COUNT,
@@ -49,6 +51,13 @@ const READINGS = { UL: 92, LR: 21 };
 const STROKE_PERIOD = 4.5;
 /** How see-through the sensor tips' frames go, 0..1 opacity. */
 const GHOST_OPACITY = 0.18;
+
+/**
+ * How see-through the six arms go on the steps that show what's inside them.
+ * Enough to read the sliding rod housed in each arm, not so much that the
+ * module stops reading as a solid frame.
+ */
+const ARM_GHOST_OPACITY = 0.3;
 
 /**
  * Camera views, module-local metres: eye and look-at point.
@@ -258,19 +267,34 @@ export function createExplainMode({ scene, camera, canvas, facade, flyTo, onExit
   hubPvMesh.castShadow = true;
   hubPvMesh.receiveShadow = true;
 
+  // The six arms are meshes of their own: each houses a sliding rod, and the
+  // steps that show the drive fade them to let it through (setArmGhost).
+  const ARMS = [...Array(C.ARM_COUNT).keys()];
+  const armAluminium = staticMesh.material.clone();
+  const armPv = pvMesh.material.clone();
+  const armMeshes = [];
+
   {
-    const rest = buildModuleStaticGeometry({ omitTips: SENSOR_ARMS, omitHub: true });
+    const rest = buildModuleStaticGeometry({
+      omitTips: SENSOR_ARMS,
+      omitHub: true,
+      omitArms: ARMS,
+    });
     const tips = buildTipGeometry(SENSOR_ARMS);
+    const arms = buildArmGeometry(ARMS);
     for (const [geometry, material] of [
       [rest.aluminium, staticMesh.material],
       [rest.pv, pvMesh.material],
       [tips.aluminium, ghostAluminium],
       [tips.pv, ghostPv],
+      [arms.aluminium, armAluminium],
+      [arms.pv, armPv],
     ]) {
       const mesh = new THREE.Mesh(geometry, material);
       mesh.castShadow = true;
       mesh.receiveShadow = true;
       mesh.userData.noAO = material.transparent;
+      if (material === armAluminium || material === armPv) armMeshes.push(mesh);
       standInCopy.add(mesh);
     }
     standInCopy.add(hubAluMesh, hubPvMesh);
@@ -333,8 +357,7 @@ export function createExplainMode({ scene, camera, canvas, facade, flyTo, onExit
    * High-contrast 3D mechanism parts (DCL-10, disc, pins, slots, rods)
    * -------------------------------------------------------------- */
 
-  const carriageStart = 456;
-  const mechanism = buildExplainMechanism(standInCopy, bisectors, carriageStart, focusGap);
+  const mechanism = buildExplainMechanism(standInCopy, bisectors, bladeSpineStations(), focusGap);
 
   // Crank arm overlays for the focus gap's 8 blades
   const focusBlades = layout.filter((e) => e.gap === focusGap);
@@ -361,6 +384,30 @@ export function createExplainMode({ scene, camera, canvas, facade, flyTo, onExit
     ghost = opacity;
     ghostAluminium.opacity = opacity;
     ghostPv.opacity = opacity;
+  }
+
+  /**
+   * Fade the arms to show the rod inside. Opaque they stay ordinary solid
+   * geometry; see-through they stop writing depth (so the rod behind shows),
+   * stop casting a solid shadow, and drop out of the ambient occlusion pass.
+   */
+  let armGhost = 1;
+  function setArmGhost(opacity) {
+    const wasSolid = armGhost >= 1;
+    const solid = opacity >= 1;
+    armGhost = opacity;
+    for (const material of [armAluminium, armPv]) {
+      material.opacity = opacity;
+      material.depthWrite = solid;
+      if (solid !== wasSolid) {
+        material.transparent = !solid;
+        material.needsUpdate = true;
+      }
+    }
+    for (const mesh of armMeshes) {
+      mesh.castShadow = solid;
+      mesh.userData.noAO = !solid;
+    }
   }
 
   /* -------------------------------------------------------------- *
@@ -410,15 +457,15 @@ export function createExplainMode({ scene, camera, canvas, facade, flyTo, onExit
     { set: 'mech', text: 'DCL-10 actuator', at: local(0, 0, C.HUB_Z_OFFSET * C.MM - 0.04), dx: -110, dy: 80 },
     { set: 'mech', text: 'Drive disc', at: local(0.07, 0.07, C.HUB_Z_OFFSET * C.MM + 0.02), dx: 110, dy: -60 },
     { set: 'mech', text: 'Output shaft', at: local(0, 0, C.HUB_Z_OFFSET * C.MM), dx: 60, dy: 50 },
-    { set: 'pin', text: 'Drive pin', at: local(0.065, 0, C.HUB_Z_OFFSET * C.MM + 0.02), dx: 90, dy: -40, bare: true },
-    { set: 'pin', text: 'Eccentric radius (65 mm)', at: local(0.033, 0, C.HUB_Z_OFFSET * C.MM + 0.02), dx: -100, dy: 60 },
-    { set: 'rod', text: 'Transverse slot', at: local(0.065, 0, C.HUB_Z_OFFSET * C.MM + 0.02), dx: -90, dy: -50 },
-    { set: 'rod', text: 'Sliding rod', at: polar(0, 0.35, -0.03), dx: 100, dy: -40 },
-    { set: 'rod', text: 'Guide channel', at: polar(0, 0.25, 0), dx: -90, dy: 70 },
+    { set: 'pin', text: 'Drive pin', at: polar(30, 0.065, C.HUB_Z_OFFSET * C.MM + 0.02), dx: 90, dy: -40, bare: true },
+    { set: 'pin', text: 'Eccentric radius (65 mm)', at: polar(30, 0.033, C.HUB_Z_OFFSET * C.MM + 0.02), dx: -100, dy: 60 },
+    { set: 'rod', text: 'Connecting link', at: polar(15, 0.12, C.HUB_Z_OFFSET * C.MM + 0.02), dx: -90, dy: -50 },
+    { set: 'rod', text: 'Sliding rod', at: polar(30, 0.35, -0.0245), dx: -120, dy: 60 },
+    { set: 'rod', text: 'Guide channel', at: polar(30, 0.28, 0.018), dx: -90, dy: 70 },
     { set: 'blade', text: 'Crank arm', at: polar(0, 0.4, -0.01), dx: 80, dy: -50, bare: true },
     { set: 'blade', text: 'Fixed pivot shaft', at: polar(0, 0.38, 0.02), dx: -110, dy: -40 },
     { set: 'blade', text: 'Linkage joint', at: polar(0, 0.42, -0.03), dx: 90, dy: 60, bare: true },
-    { set: 'blade', text: 'Sliding rod', at: polar(0, 0.30, -0.03), dx: -80, dy: 80 },
+    { set: 'blade', text: 'Sliding rod', at: polar(30, 0.45, -0.0245), dx: -115, dy: -45 },
   ];
   let labelSet = null;
 
@@ -562,6 +609,7 @@ export function createExplainMode({ scene, camera, canvas, facade, flyTo, onExit
       view: 'hub',
       hubOpen: true,
       mechVisible: true,
+      ghostArms: true,
       labels: 'mech',
       tau: 0.25,
       pose: () => 1,
@@ -573,7 +621,7 @@ export function createExplainMode({ scene, camera, canvas, facade, flyTo, onExit
       title: 'Six off-centre pins move around the actuator axis',
       text:
         'The disc carries six equally spaced drive pins at an eccentric radius. Each pin follows a ' +
-        'circular path around the shaft. Pins engage transverse slots — not rigidly connected to the rods.',
+        'circular path around the shaft. A connecting link takes each pin to the rod inside its arm.',
       notes:
         'The pins sit away from the disc centre (the eccentric radius), so each pin follows a ' +
         'circular path around the shaft.',
@@ -588,20 +636,21 @@ export function createExplainMode({ scene, camera, canvas, facade, flyTo, onExit
     },
     {
       chain: 5,
-      short: 'Slotted rods',
-      title: 'The slotted rod converts rotation into linear movement',
+      short: 'Linkage',
+      title: 'The connecting link turns rotation into straight-line pull',
       text:
-        'Each sliding rod runs in a guide channel along the centre line of each region. The pin\'s radial ' +
-        'component pushes the rod; the sideways component is absorbed by the pin sliding across the slot.',
+        'Each sliding rod runs in a guide channel inside one of the six supporting arms. A link of fixed ' +
+        'length joins the drive pin to the rod\'s inner end, so as the pin swings round it pulls the rod ' +
+        'along the arm; the sideways part of the pin\'s travel is taken up by the link swinging over.',
       notes:
-        'Disc rotation → pin circular movement → guided rod linear movement. All six pins share the ' +
+        'Disc rotation → pin swings round → link pulls the rod along its arm. All six pins share the ' +
         'same geometry, so all six rods move together by the same distance.',
       view: 'gap',
       hubOpen: true,
       mechVisible: true,
       focusHighlight: true,
       labels: 'rod',
-      diagram: 'slot',
+      diagram: 'link',
       show: ['driveFocus'],
       tau: 0.25,
       pose: (g, t) => tiltToState(tiltCycle(t, MECH_CYCLE)[0]),
@@ -632,7 +681,8 @@ export function createExplainMode({ scene, camera, canvas, facade, flyTo, onExit
       short: 'Blades',
       title: 'Each sliding rod moves eight blades',
       text:
-        'One rod per region connects to eight blades through crank arms and linkage joints. ' +
+        'One rod per arm connects to eight blades — the four on each side of it — through crank ' +
+        'arms and linkage joints. ' +
         'When the rod moves inward, the crank arms rotate all eight blades together. ' +
         'One actuator moves all six rods, so all 48 blades rotate simultaneously.',
       notes:
@@ -810,6 +860,7 @@ export function createExplainMode({ scene, camera, canvas, facade, flyTo, onExit
     mechanism.setVisible(!!step.mechVisible);
     mechanism.showOrbits(!!step.showOrbits);
     mechanism.setFocusHighlight(!!step.focusHighlight);
+    mechanism.setSeeThrough(!!step.ghostArms);
 
     // Crank arm overlays
     for (const { group: armGroup } of crankArms) {
@@ -889,10 +940,12 @@ export function createExplainMode({ scene, camera, canvas, facade, flyTo, onExit
     showChain(undefined);
     standIn(false);
     setGhost(1);
+    setArmGhost(1);
     setHubCover(false);
     mechanism.setVisible(false);
     mechanism.showOrbits(false);
     mechanism.setFocusHighlight(false);
+    mechanism.setSeeThrough(false);
     for (const { group: armGroup } of crankArms) armGroup.visible = false;
     for (const s of sensors) {
       s.halo.visible = false;
@@ -955,6 +1008,11 @@ export function createExplainMode({ scene, camera, canvas, facade, flyTo, onExit
       arrow.quaternion.setFromUnitVectors(UP, sunDir);
       arrow.scale.setScalar(1 - (1 - arrowGrow) ** 3);
     }
+
+    // Arm ghost: the steps that show the drive fade the arms over it
+    const armTarget = step.ghostArms ? ARM_GHOST_OPACITY : 1;
+    const a = armGhost + (armTarget - armGhost) * (1 - Math.exp(-dt / 0.3));
+    setArmGhost(Math.abs(armTarget - a) < 1e-3 ? armTarget : a);
 
     // Sensor tip ghost
     const ghostTarget = step.sensors ? GHOST_OPACITY : 1;

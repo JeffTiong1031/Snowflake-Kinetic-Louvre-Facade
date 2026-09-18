@@ -91,6 +91,7 @@ const sun = createSunController({
   ambientLight,
   facade,
   sky,
+  city,
 });
 
 const presets = createCameraPresets({
@@ -139,7 +140,7 @@ presets.goTo('tower');
 
 // Dev server only -- stripped from production builds: lets scripted
 // screenshots place the camera exactly.
-if (import.meta.env.DEV) window.__snowflake = { camera, controls, presets };
+if (import.meta.env.DEV) window.__snowflake = { camera, controls, presets, sun, facade };
 
 /* ------------------------------------------------------------------ *
  * Adaptive quality
