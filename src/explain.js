@@ -657,26 +657,6 @@ export function createExplainMode({ scene, camera, canvas, facade, flyTo, onExit
       mechPose: (t) => tiltCycle(t, MECH_CYCLE)[0],
     },
     {
-      // No chain — calculation step, chain strip hidden
-      title: 'Required slider movement',
-      text:
-        'With crank arm a = 60 mm and θ = 45°, the chord movement is s = 2a·sin(θ/2) ≈ 46 mm. ' +
-        'A pin radius of ≈65 mm working through 45° gives the same stroke.',
-      notes:
-        'Design values: eccentric pin radius ≈ 65 mm, slider stroke ≈ 46 mm, crank arm ≈ 60 mm, ' +
-        'blade rotation 0°–45°.',
-      view: 'gap',
-      hubOpen: false,
-      diagram: 'calc',
-      mechVisible: true,
-      showCranks: true,
-      show: ['slats', 'hinges'],
-      labels: 'blade',
-      tau: 0.25,
-      pose: (g, t) => tiltToState(tiltCycle(t, MECH_CYCLE)[0]),
-      mechPose: (t) => tiltCycle(t, MECH_CYCLE)[0],
-    },
-    {
       chain: 6,
       short: 'Blades',
       title: 'Each sliding rod moves eight blades',
