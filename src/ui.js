@@ -35,7 +35,7 @@ export function createUI({ onPreset, onExplain, onSceneChange, solarAngles }) {
     elevation: 0,
     /**
      * 'day' (normal daylight), 'hot' (hot afternoon, louvres track the sun),
-     * 'night' or 'storm' (wind and rain, louvres fully open).
+     * 'night' or 'storm' (wind and rain, louvres slightly open).
      */
     mode: modeInputs.find((input) => input.checked)?.value ?? 'hot',
     manualOverride: false,
@@ -58,7 +58,7 @@ export function createUI({ onPreset, onExplain, onSceneChange, solarAngles }) {
     day: 'Soft daylight, no glare · louvres fully open',
     hot: 'Strong sun · the louvres track it',
     night: 'Night · louvres fully open',
-    storm: 'Strong wind, heavy rain · louvres fully open',
+    storm: 'Strong wind, heavy rain · louvres slightly open',
   };
   function showMode() {
     sunControls.hidden = params.mode !== 'hot';

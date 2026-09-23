@@ -92,6 +92,11 @@ export function createSunController({
 
   const closedAngle = C.BLADE_CLOSED_ANGLE_DEG * DEG;
   const travel = C.BLADE_OPEN_ANGLE_DEG * DEG - closedAngle;
+  /** The storm's slight opening, as a state: 0 = flat, 1 = swung right in. */
+  const STORM_STATE = clamp01(
+    (C.STORM_BLADE_ANGLE_DEG - C.BLADE_CLOSED_ANGLE_DEG) /
+      (C.BLADE_OPEN_ANGLE_DEG - C.BLADE_CLOSED_ANGLE_DEG)
+  );
   /** Each gap's opening angle for the current sun: open until the first answer is in. */
   const gapAngles = new Float32Array(gaps).fill(C.BLADE_OPEN_ANGLE_DEG * DEG);
   const gapTargets = new Float32Array(gaps);
@@ -177,9 +182,11 @@ export function createSunController({
       targets.fill(params.manualState);
     } else if (params.mode === 'hot') {
       computeTargets(params);
+    } else if (params.mode === 'storm') {
+      // Down to a slight opening for the weather, the same for every module.
+      targets.fill(STORM_STATE);
     } else {
-      // No harsh sun to keep out: open for daylight and view. In the storm the
-      // slats stand edge-on to the wind, so it passes through them.
+      // No harsh sun to keep out: open for daylight and view.
       targets.fill(1);
     }
 

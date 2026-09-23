@@ -219,6 +219,12 @@ export const SLIDER_HEIGHT = 12;
 export const BLADE_OPEN_ANGLE_DEG = 90;
 export const BLADE_CLOSED_ANGLE_DEG = 0;
 
+/**
+ * Where the slats stand out the storm: halfway between flat and swung right
+ * in, measured from flat like the two above.
+ */
+export const STORM_BLADE_ANGLE_DEG = 45;
+
 /* ------------------------------------------------------------------ *
  * Tower and curtain wall
  * ------------------------------------------------------------------ */
