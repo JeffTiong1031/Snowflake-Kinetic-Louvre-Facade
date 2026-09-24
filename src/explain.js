@@ -4,8 +4,8 @@
  * (or the left arrow) goes back, N shows the narration, Escape leaves. A drag
  * still orbits the camera.
  *
- * It opens with the control chain -- sunlight, the IP68 sensors, the Arduino,
- * the DCL-10 actuator, the slotted rod, the louvres -- built up step by step in
+ * It opens with the control chain -- sunlight, the IP68 sensors, the controller,
+ * the DCL-10 actuator, the sliding rod, the louvres -- built up step by step in
  * a strip across the top, earlier steps greyed.
  *
  * 3D FIRST APPROACH:
@@ -559,7 +559,7 @@ export function createExplainMode({ scene, camera, canvas, facade, flyTo, onExit
         'Using two sensors lets the controller compare readings, so one shaded sensor cannot control incorrectly.',
       notes:
         'Mounted at opposite snowflake tips (upper-left and lower-right). Both send readings to ' +
-        'the Arduino-based controller.',
+        'the controller.',
       view: 'sensor',
       sun: true,
       sensors: true,
@@ -588,7 +588,7 @@ export function createExplainMode({ scene, camera, canvas, facade, flyTo, onExit
       short: 'Position command',
       title: 'The controller sends a position command',
       text:
-        'The Arduino-based controller sends a position command to the 24 V DCL-10 actuator. ' +
+        'The controller sends a position command to the 24 V DCL-10 actuator. ' +
         'Signal options: 0–10 V, 4–20 mA, or RS485/Modbus. The actuator provides position feedback.',
       notes:
         'Manufacturer data: adjustable 0°–90° range, 100 Nm standard torque, about 30 s for 90° ' +

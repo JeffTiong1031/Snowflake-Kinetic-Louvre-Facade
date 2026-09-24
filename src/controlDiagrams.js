@@ -140,8 +140,7 @@ function commandDiagram(g) {
   const ctrlX = 40;
   const ctrlY = 80;
   svg('rect', { x: ctrlX, y: ctrlY, width: 180, height: 70, rx: 10, fill: FILL, stroke: BLUE, 'stroke-width': 2 }, g);
-  label(g, ctrlX + 90, ctrlY + 30, 'Arduino-based', { 'text-anchor': 'middle', 'font-weight': 700, fill: BLUE, 'font-size': 14 });
-  label(g, ctrlX + 90, ctrlY + 50, 'controller', { 'text-anchor': 'middle', 'font-weight': 700, fill: BLUE, 'font-size': 14 });
+  label(g, ctrlX + 90, ctrlY + 42, 'Controller', { 'text-anchor': 'middle', 'font-weight': 700, fill: BLUE, 'font-size': 14 });
 
   const actX = 420;
   const actY = 80;
